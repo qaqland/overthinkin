@@ -112,12 +112,12 @@ static bool ensure_dir(const char *path, mode_t mode) {
 }
 
 static bool user_skip(const char *path) {
-	printf("overwrite %s? (y/n): ", path);
+	printf("overwrite %s? (y/N): ", path);
 	fflush(stdout);
 
-	char response;
+	char response = EOF;
 	scanf(" %c", &response);
-	if (tolower(response) == 'y') {
+	if (tolower((unsigned char) response) == 'y') {
 		return false;
 	}
 	return true;
