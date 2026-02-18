@@ -262,6 +262,7 @@ struct keyi_file *copy_one(const char *path, const char *prefix) {
 
 	off_t count = old_stat.st_size;
 	if (count > 0x7FFFF000) {
+		warnx("file too large %s", f->old_path);
 		goto ret;
 	}
 	off_t offset = 0;
@@ -328,6 +329,12 @@ bool save_one(const struct keyi_file *f) {
 		return false;
 	}
 
+	size_t count = tmp_stat.st_size;
+	if (count > 0x7FFFF000) {
+		warnx("file too large %s", f->tmp_path);
+		return false;
+	}
+
 	struct timespec tmp_time = f->time;
 	struct timespec new_time = tmp_stat.st_mtim;
 
@@ -353,7 +360,6 @@ bool save_one(const struct keyi_file *f) {
 	}
 
 	// copy
-	size_t count = tmp_stat.st_size;
 	off_t offset = 0;
 	ssize_t sent = sendfile(f->old_fd, f->tmp_fd, &offset, count);
 	if (sent != count) {
@@ -377,6 +383,7 @@ bool save_all(struct keyi_file **files) {
 		}
 		clean_one(f, !is_ok);
 	}
+	sync();
 
 	return ret;
 }
