@@ -1,0 +1,8 @@
+*.out
+.gdb_history
+core
+keyi
+log
+soda
+sodo
+test
