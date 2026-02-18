@@ -422,7 +422,7 @@ void free_argv(char **argv) {
 }
 
 void set_root(void) {
-	debugx("set root r(%d) -> e(%d)", ruid, euid);
+	debugx("set root e(%d)", euid);
 
 	if (setgid(euid) == -1) {
 		err(1, "failed to setgid %d", euid);
@@ -434,6 +434,19 @@ void set_root(void) {
 	const struct passwd *pw = lazy_passwd();
 	if (initgroups(pw->pw_name, euid) == -1) {
 		err(1, "failed to initgroups %d", euid);
+	}
+}
+
+void set_user(void) {
+	debugx("set user r(%d) ", ruid);
+
+	// 1 st
+	if (setgid(rgid) == -1) {
+		err(1, "failed to setgid");
+	}
+	// 2 nd
+	if (setuid(ruid) == -1) {
+		err(1, "failed to setuid");
 	}
 }
 
@@ -572,8 +585,7 @@ int main(int argc, char *argv[]) {
 	case -1:
 		err(1, "failed to fork");
 	case 0:
-		setgid(rgid); // 1 st
-		setuid(ruid); // 2 nd
+		set_user();
 		execvp(new_argv[0], new_argv);
 		err(1, "failed to exec editor %s", editor);
 	default:
