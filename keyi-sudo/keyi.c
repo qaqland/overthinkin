@@ -80,37 +80,7 @@ struct keyi_file {
 uid_t ruid, euid, suid;
 gid_t rgid, egid, sgid;
 
-char *bin_path(const char *exec_name) {
-	if (strchr(exec_name, '/')) {
-		return strdup(exec_name);
-	}
-
-	char *user_path = getenv("PATH");
-	char *full_path = strdup(user_path ? user_path : SECURE_PATH);
-	char *exec_path = NULL;
-
-	char buff_path[PATH_MAX] = {0};
-	char *token = strtok(full_path, ":");
-	while (token) {
-		snprintf(buff_path, PATH_MAX, "%s/%s", token, exec_name);
-		if (access(buff_path, F_OK) == 0) {
-			exec_path = buff_path;
-			break;
-		}
-		token = strtok(NULL, ":");
-	}
-	free(full_path);
-
-	if (exec_path) {
-		debugx("command %s -> %s", exec_name, exec_path);
-		return strdup(exec_path);
-	} else {
-		// [[no return]]
-		// errx(1, "command not found: %s", exec);
-		warnx("command not found %s", exec_name);
-		return NULL;
-	}
-}
+struct passwd *rpw, *epw;
 
 const char *env_editor(void) {
 	const char *items[] = {
@@ -133,29 +103,14 @@ const char *env_editor(void) {
 	return name;
 }
 
-const struct passwd *lazy_passwd(void) {
-	static const struct passwd *pw = NULL;
-	if (pw) {
-		return pw;
-	}
-	if (!pw) {
-		pw = getpwuid(euid);
-	}
-	if (!pw) {
-		err(1, "failed to getpwuid");
-	}
-	return pw;
-}
-
 void env_root(void) {
 	const char *term = getenv("TERM");
-	const struct passwd *pw = lazy_passwd();
 
 	clearenv();
 
-	setenv("USER", pw->pw_name, true);
-	setenv("LOGNAME", pw->pw_name, true);
-	setenv("HOME", pw->pw_dir, true);
+	setenv("USER", epw->pw_name, true);
+	setenv("LOGNAME", epw->pw_name, true);
+	setenv("HOME", epw->pw_dir, true);
 
 	// it's shell's duty to set SHELL
 	// setenv("SHELL", pw->pw_shell, true);
@@ -438,8 +393,7 @@ void set_root(void) {
 		err(1, "failed to setuid %d", euid);
 	}
 
-	const struct passwd *pw = lazy_passwd();
-	if (initgroups(pw->pw_name, euid) == -1) {
+	if (initgroups(epw->pw_name, euid) == -1) {
 		err(1, "failed to initgroups %d", euid);
 	}
 }
@@ -461,42 +415,28 @@ void set_user(void) {
 	env_root();
 	env_opts(argc, argv, true);
 
-	const struct passwd *pw = lazy_passwd();
-
 	const char *exec_argv = argv[optind];
-	char *exec_path = bin_path(exec_argv);
-	if (!exec_path) {
-		exit(1);
-	}
 
 	set_root();
 
-	syslog(LOG_INFO | LOG_AUTH, "%s ran command %s as root from %s",
-	       pw->pw_name, exec_path, getcwd(NULL, 0));
-	execvp(exec_path, &argv[optind]);
-	err(1, "failed to execvp %s", exec_path);
+	syslog(LOG_INFO | LOG_AUTH, "%s ran command %s as %s from %s",
+	       rpw->pw_name, exec_argv, epw->pw_name, getcwd(NULL, 0));
+	execvp(exec_argv, &argv[optind]);
+	err(1, "failed to execvp %s", exec_argv);
 }
 
 [[noreturn]] void run_shell(int argc, char *argv[]) {
 	env_root();
 	env_opts(argc, argv, true);
 
-	const struct passwd *pw = lazy_passwd();
-
 	const char *shell = getenv("SHELL");
 	if (!shell) {
-		shell = pw->pw_shell;
-	} else {
-		shell = bin_path(shell);
-	}
-
-	if (!shell || shell[0] != '/') {
-		errx(1, "shell not found");
+		shell = epw->pw_shell;
 	}
 
 	const char *home = getenv("HOME");
 	if (!home) {
-		home = pw->pw_dir;
+		home = epw->pw_dir;
 	}
 	chdir(home);
 
@@ -505,8 +445,8 @@ void set_user(void) {
 
 	set_root();
 
-	syslog(LOG_INFO | LOG_AUTH, "%s ran a shell as root from %s",
-	       pw->pw_name, getcwd(NULL, 0));
+	syslog(LOG_INFO | LOG_AUTH, "%s ran a shell as %s from %s",
+	       rpw->pw_name, epw->pw_name, getcwd(NULL, 0));
 	execlp(shell, name, NULL);
 	err(1, "failed to exec shell");
 }
@@ -549,6 +489,16 @@ int main(int argc, char *argv[]) {
 
 	if (getresgid(&rgid, &egid, &sgid) == -1) {
 		err(1, "failed to getresgid");
+	}
+
+	rpw = getpwuid(ruid);
+	if (!rpw) {
+		err(1, "failed to getpwuid");
+	}
+
+	epw = getpwuid(euid);
+	if (!epw) {
+		err(1, "failed to getpwuid");
 	}
 
 	if (euid != 0) {
