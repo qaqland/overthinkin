@@ -64,7 +64,7 @@ void debugx(const char *fmt, ...) {
 }
 
 enum keyi_mode {
-	KEYI_COMMAND = 0,
+	KEYI_CMD = 0,
 	KEYI_SHELL, // 1.shell 2.cd home
 	KEYI_EDIT,
 };
@@ -411,7 +411,7 @@ void set_user(void) {
 	}
 }
 
-[[noreturn]] void run_command(int argc, char *argv[]) {
+[[noreturn]] void run_cmd(int argc, char *argv[]) {
 	env_root();
 	env_opts(argc, argv, true);
 
@@ -452,7 +452,7 @@ void set_user(void) {
 }
 
 int main(int argc, char *argv[]) {
-	enum keyi_mode mode = KEYI_COMMAND;
+	enum keyi_mode mode = KEYI_CMD;
 
 	optind = env_opts(argc, argv, false);
 
@@ -509,8 +509,8 @@ int main(int argc, char *argv[]) {
 	}
 
 	switch (mode) {
-	case KEYI_COMMAND:
-		run_command(argc, argv);
+	case KEYI_CMD:
+		run_cmd(argc, argv);
 		break;
 	case KEYI_SHELL:
 		run_shell(argc, argv);
