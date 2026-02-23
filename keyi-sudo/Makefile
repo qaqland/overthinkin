@@ -12,7 +12,7 @@ test: test.c keyi.c
 	./test
 
 keyi: keyi.c
-	cc -g $< -o $@
+	$(CC) $(CFLAGS) -g $< -o $@
 	chmod u+s,o-x $@
 
 install: keyi
