@@ -41,7 +41,7 @@
 #define PROG_USAGE                                                             \
 	"usage: " PROG_NAME " [NAME=VALUE] COMMAND [ARG]...\n"                 \
 	"   or: " PROG_NAME " [NAME=VALUE] -i\n"                               \
-	"   or: " PROG_NAME " -e FILE...\n"
+	"   or: " PROG_NAME " -e FILE\n"
 
 // with errno
 void debug(const char *fmt, ...) {
@@ -67,13 +67,13 @@ void debugx(const char *fmt, ...) {
 enum keyi_mode {
 	KEYI_CMD = 0,
 	KEYI_SHELL, // 1.shell 2.cd home
-	KEYI_EDIT,
+	KEYI_EDIT,  // only one file
 };
 
 struct keyi_file {
-	const char *old_path;
-	char *tmp_path;
-	int old_fd;
+	const char *src_path;
+	const char *tmp_path;
+	int src_fd;
 	int tmp_fd;
 	struct timespec time;
 };
@@ -146,92 +146,66 @@ int env_opts(int argc, char *argv[], bool write) {
 	return i;
 }
 
-static void clean_one(struct keyi_file *f, bool keep) {
-	if (!f) {
-		return;
-	}
-	if (f->old_path) {
-		debugx("cleanup %s", f->old_path);
-	}
-
-	// ignore errors
-	if (close(f->old_fd) == 0) {
-		debugx("close old fd %d", f->old_fd);
-	}
-	if (close(f->tmp_fd) == 0) {
-		debugx("close tmp fd %d", f->tmp_fd);
-	}
-
-	if (!keep && unlink(f->tmp_path) == 0) {
-		debugx("delete %s", f->tmp_path);
-	}
-
-	free(f->tmp_path);
-	free(f);
-}
-
-static void clean_all(struct keyi_file **files) {
-	if (!files) {
-		return;
-	}
-	for (int i = 0; files[i]; i++) {
-		clean_one(files[i], false);
-	}
-	free(files);
-}
-
-struct keyi_file *copy_one(const char *path, const char *prefix) {
-	assert(path);
+// in sudo, a file will be created if it does not exist,
+// but yeki does not implement. there are various cases:
+//
+// 1. file does not exist
+// 2. directory does not exist
+// 3. permissions are insufficient
+//
+// so this feature was not introduced for simplicity.
+//
+bool copy_one(struct keyi_file *f, const char *prefix) {
+	assert(f);
+	assert(f->src_path);
 	assert(prefix);
 
-	struct keyi_file *f = calloc(1, sizeof(*f));
-	f->old_path = path;
-
-	f->old_fd = open(path, O_RDWR | O_NOFOLLOW | O_CLOEXEC);
-	if (f->old_fd == -1) {
+	const char *path = f->src_path;
+	f->src_fd = open(path, O_RDWR | O_NOFOLLOW | O_CLOEXEC);
+	if (f->src_fd == -1) {
 		warn("failed to open %s", path);
-		goto ret;
+		goto err_out;
 	}
 
-	struct stat old_stat = {0};
-	if (fstat(f->old_fd, &old_stat)) {
+	struct stat src_stat = {0};
+	if (fstat(f->src_fd, &src_stat)) {
 		warn("failed to fstat %s", path);
-		goto ret;
+		goto clean_src;
 	}
-	if (!S_ISREG(old_stat.st_mode)) {
+	if (!S_ISREG(src_stat.st_mode)) {
 		warnx("not a regular file %s", path);
-		goto ret;
+		goto clean_src;
 	}
 
 	const char *base = strrchr(path, '/');
 	base = base ? base + 1 : path;
 
-	char buff[PATH_MAX] = {0};
-	snprintf(buff, PATH_MAX, "%s/" PROG_NAME ".XXXXXX%s", prefix, base);
+	static char buff[PATH_MAX] = {0};
+	snprintf(buff, sizeof(buff), "%s/" PROG_NAME ".XXXXXX%s", prefix, base);
 
 	f->tmp_fd = mkostemps(buff, strlen(base), O_CLOEXEC);
 	if (f->tmp_fd == -1) {
 		warn("failed to mkstemps %s", buff);
-		goto ret;
+		goto clean_src;
 	}
-	f->tmp_path = strdup(buff);
+	f->tmp_path = buff;
 
-	off_t count = old_stat.st_size;
+	off_t count = src_stat.st_size;
 	if (count > 0x7FFFF000) {
-		warnx("file too large %s", f->old_path);
-		goto ret;
+		warnx("file too large %s", f->src_path);
+		goto clean_tmp;
 	}
 	off_t offset = 0;
-	ssize_t sent = sendfile(f->tmp_fd, f->old_fd, &offset, count);
+	ssize_t sent = sendfile(f->tmp_fd, f->src_fd, &offset, count);
 	if (sent != count) {
-		warn("failed to sendfile from %s to %s", f->old_path,
+		warn("failed to sendfile from %s to %s", f->src_path,
 		     f->tmp_path);
-		goto ret;
+		goto clean_tmp;
 	}
 
 	if (fchown(f->tmp_fd, ruid, rgid)) {
 		warn("failed to fchown %s", f->tmp_path);
-		goto ret;
+		goto clean_tmp;
 	}
 
 	struct stat tmp_stat = {0};
@@ -239,43 +213,15 @@ struct keyi_file *copy_one(const char *path, const char *prefix) {
 	f->time = tmp_stat.st_mtim;
 
 	debugx("copy file from %s to %s", path, f->tmp_path);
-	return f;
+	return true;
 
-ret:
-	// in sudo, a file will be created if it does not exist,
-	// but yeki does not implement. there are various cases:
-	//
-	// 1. file does not exist
-	// 2. directory does not exist
-	// 3. permissions are insufficient
-	//
-	// so this feature was not introduced for simplicity.
-
-	clean_one(f, false);
-	return NULL;
-}
-
-struct keyi_file **copy_all(int argc, char *argv[]) {
-	const char *prefix = "/tmp";
-
-	struct keyi_file **files = calloc(argc - optind + 1, sizeof(*files));
-
-	int count = 0;
-	for (int i = optind; i < argc; i++) {
-		const char *name = argv[i];
-		struct keyi_file *file = copy_one(name, prefix);
-		if (!file) {
-			goto err;
-		}
-		files[count++] = file;
-	}
-
-	assert(files[count] == NULL);
-	return files;
-
-err:
-	clean_all(files);
-	errx(1, "one of the file(s)");
+clean_tmp:
+	close(f->tmp_fd);
+	unlink(f->tmp_path);
+clean_src:
+	close(f->src_fd);
+err_out:
+	return false;
 }
 
 bool save_one(const struct keyi_file *f) {
@@ -285,7 +231,7 @@ bool save_one(const struct keyi_file *f) {
 		return false;
 	}
 
-	size_t count = tmp_stat.st_size;
+	off_t count = tmp_stat.st_size;
 	if (count > 0x7FFFF000) {
 		warnx("file too large %s", f->tmp_path);
 		return false;
@@ -301,87 +247,32 @@ bool save_one(const struct keyi_file *f) {
 
 	if (tmp_time.tv_sec == new_time.tv_sec &&
 	    tmp_time.tv_nsec == new_time.tv_nsec) {
-		warnx("unchanged %s", f->old_path);
+		warnx("unchanged %s", f->src_path);
 		return true;
 	}
 
 	// necessary!
-	if (lseek(f->old_fd, 0, SEEK_SET) == -1) {
-		warn("failed to lseek %s", f->old_path);
+	if (lseek(f->src_fd, 0, SEEK_SET) == -1) {
+		warn("failed to lseek %s", f->src_path);
 		return false;
 	}
-	if (ftruncate(f->old_fd, 0)) {
-		warn("failed to fstat %s", f->old_path);
+	if (ftruncate(f->src_fd, 0)) {
+		warn("failed to fstat %s", f->src_path);
 		return false;
 	}
 
 	// copy
 	off_t offset = 0;
-	ssize_t sent = sendfile(f->old_fd, f->tmp_fd, &offset, count);
+	ssize_t sent = sendfile(f->src_fd, f->tmp_fd, &offset, count);
 	if (sent != count) {
 		warn("failed to sendfile from %s to %s", f->tmp_path,
-		     f->old_path);
+		     f->src_path);
 	}
 
-	debugx("copy %s back to %s", f->tmp_path, f->old_path);
-	return true;
-}
-
-bool save_all(struct keyi_file **files) {
-	bool ret = true;
-
-	for (int i = 0; files[i]; i++) {
-		struct keyi_file *f = files[i];
-		bool is_ok = save_one(f);
-		if (!is_ok) {
-			warnx("backup retained at %s", f->tmp_path);
-			ret = false;
-		}
-		clean_one(f, !is_ok);
-	}
 	sync();
 
-	return ret;
-}
-
-char **edit_argv(const char *editor, struct keyi_file **files) {
-
-	// EDITOR="vim -u NONE"
-	wordexp_t p;
-	wordexp(editor, &p, WRDE_NOCMD);
-
-	int count = 0;
-	while (files[count]) {
-		count++;
-	}
-
-	char **argv = calloc(p.we_wordc + count + 1, sizeof(*argv));
-
-	for (size_t i = 0; i < p.we_wordc; i++) {
-		argv[i] = strdup(p.we_wordv[i]);
-		debugx("argv editor %s", p.we_wordv[i]);
-	}
-
-	for (int i = 0; i < count; i++) {
-		struct keyi_file *f = files[i];
-		argv[p.we_wordc + i] = strdup(f->tmp_path);
-		debugx("argv tmp file %s", f->tmp_path);
-	}
-
-	assert(argv[p.we_wordc + count] == NULL);
-
-	wordfree(&p);
-	return argv;
-}
-
-void free_argv(char **argv) {
-	if (!argv) {
-		return;
-	}
-	for (int i = 0; argv[i]; i++) {
-		free(argv[i]);
-	}
-	free(argv);
+	debugx("copy %s back to %s", f->tmp_path, f->src_path);
+	return true;
 }
 
 void set_root(void) {
@@ -479,11 +370,6 @@ int main(int argc, char *argv[]) {
 		}
 	}
 
-	if ((optind == argc) != (mode == KEYI_SHELL)) {
-		printf(PROG_USAGE);
-		exit(1);
-	}
-
 	if (getresuid(&ruid, &euid, &suid) == -1) {
 		err(1, "failed to getresuid");
 	}
@@ -511,12 +397,24 @@ int main(int argc, char *argv[]) {
 
 	switch (mode) {
 	case KEYI_CMD:
+		if (argc - optind == 0) {
+			printf(PROG_USAGE);
+			exit(1);
+		}
 		run_cmd(argc, argv);
 		break;
 	case KEYI_SHELL:
+		if (argc - optind != 0) {
+			printf(PROG_USAGE);
+			exit(1);
+		}
 		run_shell(argc, argv);
 		break;
 	case KEYI_EDIT:
+		if (argc - optind != 1) {
+			printf(PROG_USAGE);
+			exit(1);
+		}
 		break;
 	}
 
@@ -525,33 +423,60 @@ int main(int argc, char *argv[]) {
 	// set_root_privilege();
 
 	// [fork] one is user editor, one is root
-	// [root] copy each file to /tmp/keyi.* (mkstemp)
-	// [user] exec editor with these files
+	// [root] copy file to /tmp/keyi.* (mkstemp)
+	// [user] exec editor
 	// [root] wait user process quit
-	// [root] copy back if modified (sendfile)
+	// [root] copy back if modified, delete tmp
 
-	struct keyi_file **files = copy_all(argc, argv);
+	bool is_ok = true;
+
+	struct keyi_file file = {0};
+	file.src_path = argv[optind];
+	is_ok = copy_one(&file, "/tmp");
+	if (!is_ok) {
+	}
 
 	env_opts(argc, argv, true);
 	const char *editor = env_editor();
-	char **new_argv = edit_argv(editor, files);
 
-	// fork
+	char buff[256] = {0};
+	snprintf(buff, sizeof(buff), "%s \"$@\"", editor);
+
+	// export EDITOR="vim -u NONE"
+	// sh -c '$EDITOR "$@"' vim test.c
+
 	pid_t pid = fork();
-	int wstatus;
-	switch (pid) {
-	case -1:
-		err(1, "failed to fork");
-	case 0:
+	if (pid == 0) {
 		set_user();
-		execvp(new_argv[0], new_argv);
-		err(1, "failed to exec editor %s", editor);
-	default:
-		debugx("waiting for editor exit...");
-		// wait
-		waitpid(pid, &wstatus, 0);
-		free_argv(new_argv);
-		save_all(files);
-		exit(0);
+		execlp("sh", "sh", "-c", buff, editor, file.tmp_path, NULL);
+		err(1, "failed to open editor %s", editor);
 	}
+
+	debugx("waiting for editor exit...");
+
+	int wstatus;
+	waitpid(pid, &wstatus, 0);
+
+	do {
+		is_ok = WEXITSTATUS(wstatus) == 0;
+		if (!is_ok) {
+			break;
+		}
+		is_ok = save_one(&file);
+		if (!is_ok) {
+			break;
+		}
+	} while (0);
+
+	close(file.src_fd);
+	close(file.tmp_fd);
+
+	if (is_ok) {
+		unlink(file.tmp_path);
+		warnx("delete tmp file %s", file.tmp_path);
+	} else {
+		warnx("backup retained at %s", file.tmp_path);
+	}
+
+	exit(is_ok ? 0 : 1);
 }
