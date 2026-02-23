@@ -80,8 +80,8 @@ struct keyi_file {
 
 uid_t ruid, euid, suid;
 gid_t rgid, egid, sgid;
-
-struct passwd *rpw, *epw;
+char rpw_name[256];
+struct passwd *epw;
 
 const char *env_editor(void) {
 	const char *items[] = {
@@ -254,8 +254,7 @@ bool save_one(const struct keyi_file *f) {
 	       new_time.tv_sec, new_time.tv_nsec);
 
 	if (tmp_time.tv_sec == new_time.tv_sec &&
-	    tmp_time.tv_nsec == new_time.tv_nsec &&
-	    f->ino == new_stat.st_ino) {
+	    tmp_time.tv_nsec == new_time.tv_nsec && f->ino == new_stat.st_ino) {
 		warnx("unchanged %s", f->src_path);
 		return true;
 	}
@@ -337,8 +336,8 @@ void set_user(void) {
 
 	set_root();
 
-	syslog(LOG_INFO | LOG_AUTH, "%s ran command %s as %s from %s",
-	       rpw->pw_name, exec_argv, epw->pw_name, cwd);
+	syslog(LOG_INFO | LOG_AUTH, "%s ran command %s as %s from %s", rpw_name,
+	       exec_argv, epw->pw_name, cwd);
 	execvp(exec_argv, &argv[optind]);
 	err(1, "cannot execute command %s", exec_argv);
 }
@@ -367,8 +366,8 @@ void set_user(void) {
 
 	set_root();
 
-	syslog(LOG_INFO | LOG_AUTH, "%s ran shell %s as %s from %s",
-	       rpw->pw_name, shell, epw->pw_name, home);
+	syslog(LOG_INFO | LOG_AUTH, "%s ran shell %s as %s from %s", rpw_name,
+	       shell, epw->pw_name, home);
 	execlp(shell, name, NULL);
 	err(1, "cannot execute shell %s", shell);
 }
@@ -408,12 +407,13 @@ int main(int argc, char *argv[]) {
 		err(1, "cannot get real/effective/saved group IDs");
 	}
 
-	rpw = getpwuid(ruid);
+	struct passwd *rpw = getpwuid(ruid);
 	if (!rpw) {
 		err(1, "cannot get password entry for real user ID");
 	}
+	strncpy(rpw_name, rpw->pw_name, sizeof(rpw_name));
 
-	epw = getpwuid(euid);
+	epw = getpwuid(euid); // rpw is no longer available
 	if (!epw) {
 		err(1, "cannot get password entry for effective user ID");
 	}
