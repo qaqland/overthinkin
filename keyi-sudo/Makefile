@@ -7,7 +7,10 @@ LDLIBS	+= $(shell pkgconf --libs cunit)
 
 all: test
 
-test: test.c keyi.c
+test: keyi test.bats
+	bats test.bats
+
+test-c: test.c keyi.c
 	$(CC) $(CFLAGS) $(LDFLAGS) $< $(LDLIBS) -o $@
 	./test
 
@@ -19,7 +22,8 @@ install: keyi
 	install -m 4750 -o root -g wheel keyi /usr/local/bin/
 
 clean:
-	rm -f test
+	rm -f test keyi
+	rm t/*.got
 
-.PHONY: all clean
+.PHONY: all clean test
 

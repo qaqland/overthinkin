@@ -1,4 +1,5 @@
 *.out
+*.got
 .gdb_history
 core
 keyi
