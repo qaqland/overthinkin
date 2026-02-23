@@ -267,9 +267,13 @@ bool save_one(const struct keyi_file *f) {
 	if (sent != count) {
 		warn("failed to sendfile from %s to %s", f->tmp_path,
 		     f->src_path);
+		return false;
 	}
 
-	sync();
+	if (fsync(f->src_fd) == -1) {
+		warn("failed to fsync %s", f->src_path);
+		return false;
+	}
 
 	debugx("copy %s back to %s", f->tmp_path, f->src_path);
 	return true;
