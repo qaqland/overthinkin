@@ -99,13 +99,14 @@ const char *env_editor(void) {
 		}
 	}
 
-	debugx("using editor: %s", name);
+	debugx("using editor %s", name);
 	return name;
 }
 
 void env_root(void) {
 	const char *term = getenv("TERM");
 
+	debugx("clear environment and set for root");
 	clearenv();
 
 	setenv("USER", epw->pw_name, true);
@@ -129,7 +130,7 @@ int env_opts(int argc, char *argv[], bool write) {
 	for (i = 1; i < argc; i++) {
 		const char *equal = strchr(argv[i], '=');
 		if (!equal) {
-			debugx("not env %s", argv[i]);
+			debugx("not an environment variable %s", argv[i]);
 			return i;
 		}
 		if (!write) {
@@ -162,13 +163,13 @@ bool copy_one(struct keyi_file *f, const char *prefix) {
 	const char *path = f->src_path;
 	f->src_fd = open(path, O_RDWR | O_NOFOLLOW | O_CLOEXEC);
 	if (f->src_fd == -1) {
-		warn("failed to open %s", path);
+		warn("cannot open file %s", path);
 		goto err_out;
 	}
 
 	struct stat src_stat = {0};
 	if (fstat(f->src_fd, &src_stat)) {
-		warn("failed to fstat %s", path);
+		warn("cannot get file status %s", path);
 		goto clean_src;
 	}
 	if (!S_ISREG(src_stat.st_mode)) {
@@ -184,7 +185,7 @@ bool copy_one(struct keyi_file *f, const char *prefix) {
 
 	f->tmp_fd = mkostemps(buff, strlen(base), O_CLOEXEC);
 	if (f->tmp_fd == -1) {
-		warn("failed to mkstemps %s", buff);
+		warn("cannot create temporary file %s", buff);
 		goto clean_src;
 	}
 	f->tmp_path = buff;
@@ -197,13 +198,12 @@ bool copy_one(struct keyi_file *f, const char *prefix) {
 	off_t offset = 0;
 	ssize_t sent = sendfile(f->tmp_fd, f->src_fd, &offset, count);
 	if (sent != count) {
-		warn("failed to sendfile from %s to %s", f->src_path,
-		     f->tmp_path);
+		warn("cannot copy from %s to %s", f->src_path, f->tmp_path);
 		goto clean_tmp;
 	}
 
 	if (fchown(f->tmp_fd, ruid, rgid)) {
-		warn("failed to fchown %s", f->tmp_path);
+		warn("cannot change ownership %s", f->tmp_path);
 		goto clean_tmp;
 	}
 
@@ -224,24 +224,24 @@ err_out:
 }
 
 bool save_one(const struct keyi_file *f) {
-	struct stat tmp_stat = {0};
-	if (fstat(f->tmp_fd, &tmp_stat)) {
-		warn("failed to fstat %s", f->tmp_path);
+	struct stat new_stat = {0};
+	if (fstat(f->tmp_fd, &new_stat)) {
+		warn("cannot get temporary file status %s", f->tmp_path);
 		return false;
 	}
 
-	off_t count = tmp_stat.st_size;
+	off_t count = new_stat.st_size;
 	if (count > 0x7FFFF000) {
 		warnx("file too large %s", f->tmp_path);
 		return false;
 	}
 
 	struct timespec tmp_time = f->time;
-	struct timespec new_time = tmp_stat.st_mtim;
+	struct timespec new_time = new_stat.st_mtim;
 
-	debugx("tmp timespec sec %ld, nsec %ld", tmp_time.tv_sec,
+	debugx("tmp timespec sec=%ld, nsec=%ld", tmp_time.tv_sec,
 	       tmp_time.tv_nsec);
-	debugx("new timespec sec %ld, nsec %ld", new_time.tv_sec,
+	debugx("new timespec sec=%ld, nsec=%ld", new_time.tv_sec,
 	       new_time.tv_nsec);
 
 	if (tmp_time.tv_sec == new_time.tv_sec &&
@@ -252,11 +252,11 @@ bool save_one(const struct keyi_file *f) {
 
 	// necessary!
 	if (lseek(f->src_fd, 0, SEEK_SET) == -1) {
-		warn("failed to lseek %s", f->src_path);
+		warn("cannot seek in file %s", f->src_path);
 		return false;
 	}
 	if (ftruncate(f->src_fd, 0)) {
-		warn("failed to fstat %s", f->src_path);
+		warn("cannot truncate file %s", f->src_path);
 		return false;
 	}
 
@@ -264,13 +264,12 @@ bool save_one(const struct keyi_file *f) {
 	off_t offset = 0;
 	ssize_t sent = sendfile(f->src_fd, f->tmp_fd, &offset, count);
 	if (sent != count) {
-		warn("failed to sendfile from %s to %s", f->tmp_path,
-		     f->src_path);
+		warn("cannot copy from %s to %s", f->tmp_path, f->src_path);
 		return false;
 	}
 
 	if (fsync(f->src_fd) == -1) {
-		warn("failed to fsync %s", f->src_path);
+		warn("cannot sync file %s", f->src_path);
 		return false;
 	}
 
@@ -279,30 +278,30 @@ bool save_one(const struct keyi_file *f) {
 }
 
 void set_root(void) {
-	debugx("set root e(%d)", euid);
+	debugx("set root effective UID %d", euid);
 
 	if (setgid(euid) == -1) {
-		err(1, "failed to setgid %d", euid);
+		err(1, "cannot set group ID %d", euid);
 	}
 	if (setuid(euid) == -1) {
-		err(1, "failed to setuid %d", euid);
+		err(1, "cannot set user ID %d", euid);
 	}
 
 	if (initgroups(epw->pw_name, euid) == -1) {
-		err(1, "failed to initgroups %d", euid);
+		err(1, "cannot initialize groups %d", euid);
 	}
 }
 
 void set_user(void) {
-	debugx("set user r(%d) ", ruid);
+	debugx("set user real UID %d", ruid);
 
 	// 1 st
 	if (setgid(rgid) == -1) {
-		err(1, "failed to setgid");
+		err(1, "cannot set group ID");
 	}
 	// 2 nd
 	if (setuid(ruid) == -1) {
-		err(1, "failed to setuid");
+		err(1, "cannot set user ID");
 	}
 }
 
@@ -324,7 +323,7 @@ void set_user(void) {
 	syslog(LOG_INFO | LOG_AUTH, "%s ran command %s as %s from %s",
 	       rpw->pw_name, exec_argv, epw->pw_name, cwd);
 	execvp(exec_argv, &argv[optind]);
-	err(1, "failed to execvp %s", exec_argv);
+	err(1, "cannot execute command %s", exec_argv);
 }
 
 [[noreturn]] void run_shell(int argc, char *argv[]) {
@@ -354,7 +353,7 @@ void set_user(void) {
 	syslog(LOG_INFO | LOG_AUTH, "%s ran shell %s as %s from %s",
 	       rpw->pw_name, shell, epw->pw_name, home);
 	execlp(shell, name, NULL);
-	err(1, "failed to exec shell");
+	err(1, "cannot execute shell %s", shell);
 }
 
 int main(int argc, char *argv[]) {
@@ -385,21 +384,21 @@ int main(int argc, char *argv[]) {
 	}
 
 	if (getresuid(&ruid, &euid, &suid) == -1) {
-		err(1, "failed to getresuid");
+		err(1, "cannot get real/effective/saved user IDs");
 	}
 
 	if (getresgid(&rgid, &egid, &sgid) == -1) {
-		err(1, "failed to getresgid");
+		err(1, "cannot get real/effective/saved group IDs");
 	}
 
 	rpw = getpwuid(ruid);
 	if (!rpw) {
-		err(1, "failed to getpwuid");
+		err(1, "cannot get password entry for real user ID");
 	}
 
 	epw = getpwuid(euid);
 	if (!epw) {
-		err(1, "failed to getpwuid");
+		err(1, "cannot get password entry for effective user ID");
 	}
 
 	if (euid != 0) {
@@ -446,8 +445,10 @@ int main(int argc, char *argv[]) {
 
 	struct keyi_file file = {0};
 	file.src_path = argv[optind];
+
 	is_ok = copy_one(&file, "/tmp");
 	if (!is_ok) {
+		exit(1);
 	}
 
 	env_opts(argc, argv, true);
@@ -463,7 +464,7 @@ int main(int argc, char *argv[]) {
 	if (pid == 0) {
 		set_user();
 		execlp("sh", "sh", "-c", buff, editor, file.tmp_path, NULL);
-		err(1, "failed to open editor %s", editor);
+		err(1, "cannot open editor %s", editor);
 	}
 
 	debugx("waiting for editor exit...");
@@ -491,7 +492,7 @@ int main(int argc, char *argv[]) {
 
 	if (is_ok) {
 		unlink(file.tmp_path);
-		warnx("delete tmp file %s", file.tmp_path);
+		warnx("delete temporary file %s", file.tmp_path);
 	} else {
 		warnx("backup retained at %s", file.tmp_path);
 	}
