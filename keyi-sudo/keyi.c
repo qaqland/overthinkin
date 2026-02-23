@@ -17,7 +17,6 @@
 #include <sys/wait.h>
 #include <syslog.h>
 #include <unistd.h>
-#include <wordexp.h>
 
 #ifndef LAST_EDITOR
 #define LAST_EDITOR "vi"
@@ -313,10 +312,17 @@ void set_user(void) {
 
 	const char *exec_argv = argv[optind];
 
+	const char *cwd = "(failed)";
+	char cwdpath[PATH_MAX] = {0};
+
+	if (getcwd(cwdpath, sizeof(cwdpath))) {
+		cwd = cwdpath;
+	}
+
 	set_root();
 
 	syslog(LOG_INFO | LOG_AUTH, "%s ran command %s as %s from %s",
-	       rpw->pw_name, exec_argv, epw->pw_name, getcwd(NULL, 0));
+	       rpw->pw_name, exec_argv, epw->pw_name, cwd);
 	execvp(exec_argv, &argv[optind]);
 	err(1, "failed to execvp %s", exec_argv);
 }
@@ -330,19 +336,23 @@ void set_user(void) {
 		shell = epw->pw_shell;
 	}
 
-	const char *home = getenv("HOME");
-	if (!home) {
-		home = epw->pw_dir;
-	}
+	const char *home = epw->pw_dir;
 	chdir(home);
 
+	const char *shellname = strrchr(shell, '/');
+	if (shellname) {
+		shellname++;
+	} else {
+		shellname = shell;
+	}
+
 	char name[PATH_MAX] = {0};
-	snprintf(name, PATH_MAX, "-%s", strrchr(shell, '/') + 1);
+	snprintf(name, PATH_MAX, "-%s", shellname);
 
 	set_root();
 
-	syslog(LOG_INFO | LOG_AUTH, "%s ran a shell as %s from %s",
-	       rpw->pw_name, epw->pw_name, getcwd(NULL, 0));
+	syslog(LOG_INFO | LOG_AUTH, "%s ran shell %s as %s from %s",
+	       rpw->pw_name, shell, epw->pw_name, home);
 	execlp(shell, name, NULL);
 	err(1, "failed to exec shell");
 }
@@ -471,6 +481,10 @@ int main(int argc, char *argv[]) {
 			break;
 		}
 	} while (0);
+
+	syslog(LOG_INFO | LOG_AUTH, "%s edited %s as %s with %s [%s]",
+	       rpw->pw_name, file.src_path, epw->pw_name, editor,
+	       is_ok ? "success" : "failure");
 
 	close(file.src_fd);
 	close(file.tmp_fd);
