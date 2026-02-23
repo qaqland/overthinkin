@@ -73,7 +73,8 @@ struct keyi_file {
 	const char *src_path;
 	const char *tmp_path;
 	int src_fd;
-	int tmp_fd;
+	// int tmp_fd; // some editors may create a new file
+	ino_t ino;
 	struct timespec time;
 };
 
@@ -183,11 +184,12 @@ bool copy_one(struct keyi_file *f, const char *prefix) {
 	static char buff[PATH_MAX] = {0};
 	snprintf(buff, sizeof(buff), "%s/" PROG_NAME ".XXXXXX%s", prefix, base);
 
-	f->tmp_fd = mkostemps(buff, strlen(base), O_CLOEXEC);
-	if (f->tmp_fd == -1) {
+	int tmp_fd = mkostemps(buff, strlen(base), O_CLOEXEC);
+	if (tmp_fd == -1) {
 		warn("cannot create temporary file %s", buff);
 		goto clean_src;
 	}
+
 	f->tmp_path = buff;
 
 	off_t count = src_stat.st_size;
@@ -196,26 +198,28 @@ bool copy_one(struct keyi_file *f, const char *prefix) {
 		goto clean_tmp;
 	}
 	off_t offset = 0;
-	ssize_t sent = sendfile(f->tmp_fd, f->src_fd, &offset, count);
+	ssize_t sent = sendfile(tmp_fd, f->src_fd, &offset, count);
 	if (sent != count) {
 		warn("cannot copy from %s to %s", f->src_path, f->tmp_path);
 		goto clean_tmp;
 	}
 
-	if (fchown(f->tmp_fd, ruid, rgid)) {
+	if (fchown(tmp_fd, ruid, rgid)) {
 		warn("cannot change ownership %s", f->tmp_path);
 		goto clean_tmp;
 	}
 
 	struct stat tmp_stat = {0};
-	fstat(f->tmp_fd, &tmp_stat);
+	fstat(tmp_fd, &tmp_stat);
 	f->time = tmp_stat.st_mtim;
+	f->ino = tmp_stat.st_ino;
 
 	debugx("copy file from %s to %s", path, f->tmp_path);
+	close(tmp_fd);
 	return true;
 
 clean_tmp:
-	close(f->tmp_fd);
+	close(tmp_fd);
 	unlink(f->tmp_path);
 clean_src:
 	close(f->src_fd);
@@ -225,7 +229,7 @@ err_out:
 
 bool save_one(const struct keyi_file *f) {
 	struct stat new_stat = {0};
-	if (fstat(f->tmp_fd, &new_stat)) {
+	if (stat(f->tmp_path, &new_stat)) {
 		warn("cannot get temporary file status %s", f->tmp_path);
 		return false;
 	}
@@ -235,17 +239,23 @@ bool save_one(const struct keyi_file *f) {
 		warnx("file too large %s", f->tmp_path);
 		return false;
 	}
+	if (count == 0) {
+		warnx("zero length temporary file %s", f->tmp_path);
+		// but it should work
+		// return false;
+	}
 
 	struct timespec tmp_time = f->time;
 	struct timespec new_time = new_stat.st_mtim;
 
-	debugx("tmp timespec sec=%ld, nsec=%ld", tmp_time.tv_sec,
+	debugx("tmp ino=%ud, sec=%ld, nsec=%ld", f->ino, tmp_time.tv_sec,
 	       tmp_time.tv_nsec);
-	debugx("new timespec sec=%ld, nsec=%ld", new_time.tv_sec,
-	       new_time.tv_nsec);
+	debugx("new ino=%ud, sec=%ld, nsec=%ld", new_stat.st_ino,
+	       new_time.tv_sec, new_time.tv_nsec);
 
 	if (tmp_time.tv_sec == new_time.tv_sec &&
-	    tmp_time.tv_nsec == new_time.tv_nsec) {
+	    tmp_time.tv_nsec == new_time.tv_nsec &&
+	    f->ino == new_stat.st_ino) {
 		warnx("unchanged %s", f->src_path);
 		return true;
 	}
@@ -260,9 +270,16 @@ bool save_one(const struct keyi_file *f) {
 		return false;
 	}
 
+	int tmp_fd = open(f->tmp_path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+	if (tmp_fd == -1) {
+		warn("cannot open temporary file %s", f->tmp_path);
+		return false;
+	}
+
 	// copy
 	off_t offset = 0;
-	ssize_t sent = sendfile(f->src_fd, f->tmp_fd, &offset, count);
+	ssize_t sent = sendfile(f->src_fd, tmp_fd, &offset, count);
+	close(tmp_fd);
 	if (sent != count) {
 		warn("cannot copy from %s to %s", f->tmp_path, f->src_path);
 		return false;
@@ -472,6 +489,8 @@ int main(int argc, char *argv[]) {
 	int wstatus;
 	waitpid(pid, &wstatus, 0);
 
+	usleep(10000); // 10ms
+
 	do {
 		is_ok = WEXITSTATUS(wstatus) == 0;
 		if (!is_ok) {
@@ -488,10 +507,11 @@ int main(int argc, char *argv[]) {
 	       is_ok ? "success" : "failure");
 
 	close(file.src_fd);
-	close(file.tmp_fd);
 
 	if (is_ok) {
+#ifdef NDEBUG
 		unlink(file.tmp_path);
+#endif
 		warnx("delete temporary file %s", file.tmp_path);
 	} else {
 		warnx("backup retained at %s", file.tmp_path);
