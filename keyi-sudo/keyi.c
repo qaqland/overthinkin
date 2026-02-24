@@ -415,7 +415,7 @@ int main(int argc, char *argv[]) {
 	if (!rpw) {
 		err(1, "cannot get password entry for real user ID");
 	}
-	strncpy(rpw_name, rpw->pw_name, sizeof(rpw_name));
+	strncpy(rpw_name, rpw->pw_name, sizeof(rpw_name) - 1);
 
 	epw = getpwuid(euid); // rpw is no longer available
 	if (!epw) {
