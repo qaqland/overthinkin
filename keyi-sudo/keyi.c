@@ -186,7 +186,12 @@ bool copy_one(struct keyi_file *f, const char *prefix) {
 	base = base ? base + 1 : path;
 
 	static char buff[PATH_MAX] = {0};
-	snprintf(buff, sizeof(buff), "%s/" PROG_NAME ".XXXXXX%s", prefix, base);
+	int written = snprintf(buff, sizeof(buff), "%s/" PROG_NAME ".XXXXXX%s",
+			       prefix, base);
+	if (written >= (int) sizeof(buff)) {
+		warnx("path too long for temporary file %s", buff);
+		goto clean_src;
+	}
 
 	int tmp_fd = mkostemps(buff, strlen(base), O_CLOEXEC);
 	if (tmp_fd == -1) {
@@ -479,6 +484,18 @@ int main(int argc, char *argv[]) {
 
 	bool is_ok = true;
 
+	env_opts(argc, argv, true);
+	const char *editor = env_editor();
+
+	// export EDITOR="vim -u NONE"
+	// sh -c '$EDITOR "$@"' vim test.c
+
+	char buff[256] = {0};
+	int written = snprintf(buff, sizeof(buff), "%s \"$@\"", editor);
+	if (written >= (int) sizeof(buff)) {
+		errx(1, "editor command too long %s", editor);
+	}
+
 	struct keyi_file file = {0};
 	file.src_path = argv[optind];
 
@@ -486,15 +503,6 @@ int main(int argc, char *argv[]) {
 	if (!is_ok) {
 		exit(1);
 	}
-
-	env_opts(argc, argv, true);
-	const char *editor = env_editor();
-
-	char buff[256] = {0};
-	snprintf(buff, sizeof(buff), "%s \"$@\"", editor);
-
-	// export EDITOR="vim -u NONE"
-	// sh -c '$EDITOR "$@"' vim test.c
 
 	pid_t pid = fork();
 	if (pid == 0) {
