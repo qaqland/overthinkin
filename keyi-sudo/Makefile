@@ -12,7 +12,7 @@ test: keyi test.bats
 
 test-c: test.c keyi.c
 	$(CC) $(CFLAGS) $(LDFLAGS) $< $(LDLIBS) -o $@
-	./test
+	./$@
 
 keyi: keyi.c
 	$(CC) $(CFLAGS) -g $< -o $@
