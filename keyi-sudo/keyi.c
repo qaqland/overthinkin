@@ -42,6 +42,9 @@
 	"   or: " PROG_NAME " [NAME=VALUE] -i\n"                               \
 	"   or: " PROG_NAME " -e FILE\n"
 
+// sendfile() will transfer at most 0x7ffff000 (2,147,479,552) bytes
+#define MAX_FILE_SIZE (0x7FFFF000)
+
 // with errno
 void debug(const char *fmt, ...) {
 #ifdef NDEBUG
@@ -193,7 +196,7 @@ bool copy_one(struct keyi_file *f, const char *prefix) {
 	f->tmp_path = buff;
 
 	off_t count = src_stat.st_size;
-	if (count > 0x7FFFF000) {
+	if (count > MAX_FILE_SIZE) {
 		warnx("file too large %s", f->src_path);
 		goto clean_tmp;
 	}
@@ -235,7 +238,7 @@ bool save_one(const struct keyi_file *f) {
 	}
 
 	off_t count = new_stat.st_size;
-	if (count > 0x7FFFF000) {
+	if (count > MAX_FILE_SIZE) {
 		warnx("file too large %s", f->tmp_path);
 		return false;
 	}
