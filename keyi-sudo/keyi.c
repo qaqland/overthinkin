@@ -173,7 +173,7 @@ bool copy_one(struct keyi_file *f, const char *prefix) {
 	}
 
 	struct stat src_stat = {0};
-	if (fstat(f->src_fd, &src_stat)) {
+	if (fstat(f->src_fd, &src_stat) == -1) {
 		warn("cannot get file status %s", path);
 		goto clean_src;
 	}
@@ -208,7 +208,7 @@ bool copy_one(struct keyi_file *f, const char *prefix) {
 		goto clean_tmp;
 	}
 
-	if (fchown(tmp_fd, ruid, rgid)) {
+	if (fchown(tmp_fd, ruid, rgid) == -1) {
 		warn("cannot change ownership %s", f->tmp_path);
 		goto clean_tmp;
 	}
@@ -233,7 +233,7 @@ err_out:
 
 bool save_one(const struct keyi_file *f) {
 	struct stat new_stat = {0};
-	if (stat(f->tmp_path, &new_stat)) {
+	if (stat(f->tmp_path, &new_stat) == -1) {
 		warn("cannot get temporary file status %s", f->tmp_path);
 		return false;
 	}
@@ -268,7 +268,7 @@ bool save_one(const struct keyi_file *f) {
 		warn("cannot seek in file %s", f->src_path);
 		return false;
 	}
-	if (ftruncate(f->src_fd, 0)) {
+	if (ftruncate(f->src_fd, 0) == -1) {
 		warn("cannot truncate file %s", f->src_path);
 		return false;
 	}
