@@ -425,6 +425,21 @@ int main(int argc, char *argv[]) {
 #endif
 	}
 
+	// expected keyi permissions are 4750 or 4754
+	char exe[PATH_MAX] = {0};
+	ssize_t len = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+	if (len < 0) {
+		err(1, "cannot read symlink /proc/self/exe");
+	}
+
+	struct stat exe_stat;
+	stat(exe, &exe_stat);
+	debugx("%s permissions %04o", exe, exe_stat.st_mode & 07777);
+
+	if (exe_stat.st_mode & S_IXOTH) {
+		errx(1, "other-executable bit must not be set");
+	}
+
 	switch (mode) {
 	case KEYI_CMD:
 		if (argc - optind == 0) {
