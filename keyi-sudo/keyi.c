@@ -9,6 +9,7 @@
 #include <pwd.h>
 #include <stdarg.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -251,9 +252,9 @@ bool save_one(const struct keyi_file *f) {
 	struct timespec tmp_time = f->time;
 	struct timespec new_time = new_stat.st_mtim;
 
-	debugx("tmp ino=%ud, sec=%ld, nsec=%ld", f->ino, tmp_time.tv_sec,
-	       tmp_time.tv_nsec);
-	debugx("new ino=%ud, sec=%ld, nsec=%ld", new_stat.st_ino,
+	debugx("tmp ino=%ju, sec=%ld, nsec=%ld", (uintmax_t) f->ino,
+	       tmp_time.tv_sec, tmp_time.tv_nsec);
+	debugx("new ino=%ju, sec=%ld, nsec=%ld", (uintmax_t) new_stat.st_ino,
 	       new_time.tv_sec, new_time.tv_nsec);
 
 	if (tmp_time.tv_sec == new_time.tv_sec &&
