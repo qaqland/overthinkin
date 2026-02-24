@@ -507,6 +507,10 @@ int main(int argc, char *argv[]) {
 	usleep(10000); // 10ms
 
 	do {
+		is_ok = WIFEXITED(wstatus) != 0;
+		if (!is_ok) {
+			break;
+		}
 		is_ok = WEXITSTATUS(wstatus) == 0;
 		if (!is_ok) {
 			break;

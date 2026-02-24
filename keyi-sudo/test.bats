@@ -1,5 +1,5 @@
 setup_file() {
-	cd "$BATS_TEST_DIRNAME"/t
+	cd "$BATS_TEST_DIRNAME"/t || exit
 
 	for file in *.orig; do
 		[ -e "$file" ] || continue
@@ -31,6 +31,12 @@ setup() {
 @test "print env" {
 	run ./keyi FOO=BAR printenv FOO
 	assert_output -p BAR
+}
+
+@test "edit with false (exit 1)" {
+	export EDITOR=false
+	run ./keyi -e unchanged.got
+	assert_output -p 'backup retained'
 }
 
 @test "edit with cat editor (unchanged)" {
