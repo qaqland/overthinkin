@@ -237,21 +237,32 @@ err_out:
 }
 
 bool save_one(const struct keyi_file *f) {
+	assert(f);
+	assert(f->tmp_path);
+
+	bool ret = false;
+
+	int tmp_fd = open(f->tmp_path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+	if (tmp_fd == -1) {
+		warn("cannot open temporary file %s", f->tmp_path);
+		goto out;
+	}
+
 	struct stat new_stat = {0};
-	if (stat(f->tmp_path, &new_stat) == -1) {
+	if (fstat(tmp_fd, &new_stat) == -1) {
 		warn("cannot get temporary file status %s", f->tmp_path);
-		return false;
+		goto out;
 	}
 
 	off_t count = new_stat.st_size;
 	if (count > MAX_FILE_SIZE) {
 		warnx("file too large %s", f->tmp_path);
-		return false;
+		goto out;
 	}
 	if (count == 0) {
 		warnx("zero length temporary file %s", f->tmp_path);
 		// but it should work
-		// return false;
+		// goto out;
 	}
 
 	struct timespec tmp_time = f->time;
@@ -265,43 +276,42 @@ bool save_one(const struct keyi_file *f) {
 	if (tmp_time.tv_sec == new_time.tv_sec &&
 	    tmp_time.tv_nsec == new_time.tv_nsec && f->ino == new_stat.st_ino) {
 		warnx("unchanged %s", f->src_path);
-		return true;
+		ret = true;
+		goto out;
 	}
 
 	// necessary!
 	if (lseek(f->src_fd, 0, SEEK_SET) == -1) {
 		warn("cannot seek in file %s", f->src_path);
-		return false;
+		goto out;
 	}
 	if (ftruncate(f->src_fd, 0) == -1) {
 		warn("cannot truncate file %s", f->src_path);
-		return false;
-	}
-
-	int tmp_fd = open(f->tmp_path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
-	if (tmp_fd == -1) {
-		warn("cannot open temporary file %s", f->tmp_path);
-		return false;
+		goto out;
 	}
 
 	// copy
 	off_t offset = 0;
 	ssize_t sent = sendfile(f->src_fd, tmp_fd, &offset, count);
-	close(tmp_fd);
 	if (sent != count) {
 		warn("cannot copy from %s to %s", f->tmp_path, f->src_path);
-		return false;
+		goto out;
 	}
 
 	if (fsync(f->src_fd) == -1) {
 		warn("cannot sync file %s", f->src_path);
-		return false;
+		goto out;
 	}
 
 	debugx("copy %s back to %s", f->tmp_path, f->src_path);
-	return true;
+	ret = true;
+
+out:
+	close(tmp_fd);
+	return ret;
 }
 
+// maybe not root
 void set_root(void) {
 	debugx("set root effective UID %d", euid);
 
@@ -533,8 +543,8 @@ int main(int argc, char *argv[]) {
 		}
 	} while (0);
 
-	syslog(LOG_INFO | LOG_AUTH, "%s edited %s as %s with %s [%s]",
-	       rpw->pw_name, file.src_path, epw->pw_name, editor,
+	syslog(LOG_INFO | LOG_AUTH, "%s edited %s as %s with %s [%s]", rpw_name,
+	       file.src_path, epw->pw_name, editor,
 	       is_ok ? "success" : "failure");
 
 	close(file.src_fd);
@@ -543,7 +553,7 @@ int main(int argc, char *argv[]) {
 #ifdef NDEBUG
 		unlink(file.tmp_path);
 #endif
-		warnx("delete temporary file %s", file.tmp_path);
+		debugx("delete temporary file %s", file.tmp_path);
 	} else {
 		warnx("backup retained at %s", file.tmp_path);
 	}
