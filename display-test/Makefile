@@ -1,17 +1,25 @@
-TARGET = display-test
-VERSION = 0.0.2
+TARGET ?= display-test
+VERSION ?= 0.0.2
+CC ?= cc
+PKG_CONFIG ?= pkg-config
 
-SDL2 = $(shell pkg-config --cflags --libs sdl2)
-CFLAGS = -Wall -Wextra -Werror -std=c99
+SDL2_CFLAGS := $(shell $(PKG_CONFIG) --cflags sdl2 2>/dev/null)
+SDL2_LIBS := $(shell $(PKG_CONFIG) --libs sdl2 2>/dev/null)
+
+CFLAGS ?= -Wall -Wextra -Werror -std=c99
+CPPFLAGS += -DVERSION=\"$(VERSION)\"
+
+.PHONY: all test clean install
 
 all: $(TARGET)
 
-$(TARGET): main.c
-	cc -o $@ $< $(SDL2) $(CFLAGS) -DVERSION=\"$(VERSION)\"
+test: $(TARGET)
 
-.PHONY: clean, install
+$(TARGET): main.c
+	$(CC) $(CFLAGS) $(CPPFLAGS) $(SDL2_CFLAGS) -o $@ $< $(SDL2_LIBS)
 
 install:
-	@echo "Please move $(TARGET) to your PATH **manually**."
+	@echo "Please move $(TARGET) to your PATH manually."
+
 clean:
 	rm -f $(TARGET)

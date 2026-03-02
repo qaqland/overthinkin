@@ -144,7 +144,7 @@ static const char *target_dst(const char *src) {
 
 	while (*src) {
 		if (strncmp(src - 1, "/dot-", 5) == 0) {
-			if (*(src + 5) != '\0') {
+			if (*(src + 4) != '\0') {
 				*ptr++ = '.';
 			} else {
 				strncpy(ptr, "dot-", 4);
