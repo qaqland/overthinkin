@@ -48,8 +48,12 @@ static int get_file_mtime(const char *filename, file_time_t *mtime) {
 	}
 
 	mtime->sec = st.st_mtime;
-	// Linux使用st_mtim结构体获取纳秒精度
+	// Linux uses st_mtim, while macOS uses st_mtimespec.
+#if defined(__APPLE__)
+	mtime->nsec = st.st_mtimespec.tv_nsec;
+#else
 	mtime->nsec = st.st_mtim.tv_nsec;
+#endif
 
 	return 0;
 }

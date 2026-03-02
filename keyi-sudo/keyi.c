@@ -13,7 +13,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/sendfile.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <syslog.h>
@@ -43,7 +42,7 @@
 	"   or: " PROG_NAME " [NAME=VALUE] -i\n"                               \
 	"   or: " PROG_NAME " -e FILE\n"
 
-// sendfile() will transfer at most 0x7ffff000 (2,147,479,552) bytes
+// keep copy size bounded for a simple single-file buffer strategy
 #define MAX_FILE_SIZE (0x7FFFF000)
 
 // with errno
@@ -206,9 +205,27 @@ bool copy_one(struct keyi_file *f, const char *prefix) {
 		warnx("file too large %s", f->src_path);
 		goto clean_tmp;
 	}
-	off_t offset = 0;
-	ssize_t sent = sendfile(tmp_fd, f->src_fd, &offset, count);
-	if (sent != count) {
+	char buf[64 * 1024];
+	while (count > 0) {
+		size_t want = count > (off_t) sizeof(buf) ? sizeof(buf) : count;
+		ssize_t n = read(f->src_fd, buf, want);
+		if (n <= 0) {
+			warn("cannot read from %s", f->src_path);
+			goto clean_tmp;
+		}
+
+		ssize_t off = 0;
+		while (off < n) {
+			ssize_t written = write(tmp_fd, buf + off, n - off);
+			if (written <= 0) {
+				warn("cannot write to %s", f->tmp_path);
+				goto clean_tmp;
+			}
+			off += written;
+		}
+		count -= n;
+	}
+	if (count != 0) {
 		warn("cannot copy from %s to %s", f->src_path, f->tmp_path);
 		goto clean_tmp;
 	}
@@ -291,11 +308,25 @@ bool save_one(const struct keyi_file *f) {
 	}
 
 	// copy
-	off_t offset = 0;
-	ssize_t sent = sendfile(f->src_fd, tmp_fd, &offset, count);
-	if (sent != count) {
-		warn("cannot copy from %s to %s", f->tmp_path, f->src_path);
-		goto out;
+	char buf[64 * 1024];
+	while (count > 0) {
+		size_t want = count > (off_t) sizeof(buf) ? sizeof(buf) : count;
+		ssize_t n = read(tmp_fd, buf, want);
+		if (n <= 0) {
+			warn("cannot read from %s", f->tmp_path);
+			goto out;
+		}
+
+		ssize_t off = 0;
+		while (off < n) {
+			ssize_t written = write(f->src_fd, buf + off, n - off);
+			if (written <= 0) {
+				warn("cannot write to %s", f->src_path);
+				goto out;
+			}
+			off += written;
+		}
+		count -= n;
 	}
 
 	if (fsync(f->src_fd) == -1) {
