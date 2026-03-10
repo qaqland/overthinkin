@@ -1,5 +1,5 @@
 setup_file() {
-	cd "$BATS_TEST_DIRNAME"/t || exit
+	cd "$BATS_TEST_DIRNAME"/fixtures || exit
 
 	for file in *.orig; do
 		[ -e "$file" ] || continue

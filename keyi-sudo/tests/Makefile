@@ -5,16 +5,16 @@ LDFLAGS	=
 CFLAGS	+= $(shell pkgconf --cflags cunit)
 LDLIBS	+= $(shell pkgconf --libs cunit)
 
-all: test
+all: integration-test unit-test
 
-test: keyi test.bats
-	bats test.bats
+integration-test: keyi integration.bats
+	bats integration.bats
 
-test-c: test.c keyi.c
+unit-test: unit-test.c ../keyi.c
 	$(CC) $(CFLAGS) $(LDFLAGS) $< $(LDLIBS) -o $@
 	./$@
 
-keyi: keyi.c
+keyi: ../keyi.c
 	$(CC) $(CFLAGS) -g $< -o $@
 	chmod u+s,o-x $@
 
@@ -22,8 +22,8 @@ install: keyi
 	install -m 4750 -o root -g wheel keyi /usr/local/bin/
 
 clean:
-	rm -f test keyi
-	rm t/*.got
+	rm -f unit-test keyi
+	rm -f fixtures/*.got
 
-.PHONY: all clean test
+.PHONY: all clean integration-test unit-test
 

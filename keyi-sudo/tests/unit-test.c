@@ -7,7 +7,7 @@
 #include <CUnit/TestDB.h>
 
 #define main main_dumb
-#include "keyi.c"
+#include "../keyi.c"
 #undef main
 
 #ifdef NDEBUG

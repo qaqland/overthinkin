@@ -35,7 +35,7 @@
 #endif
 
 #ifndef PROG_VERSION
-#define PROG_VERSION "0.3.0"
+#define PROG_VERSION "(dev)"
 #endif
 
 #define PROG_USAGE                                                             \

@@ -1,9 +1,12 @@
-*.out
 *.got
+*.out
+.cache
 .gdb_history
+build
 core
-keyi
 log
 soda
 sodo
 test-c
+tests/keyi
+tests/unit-test
