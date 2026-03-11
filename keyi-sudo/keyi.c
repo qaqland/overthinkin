@@ -486,8 +486,8 @@ int main(int argc, char *argv[]) {
 	// we already have the EUID
 	// set_root_privilege();
 
-	// [fork] one is user editor, one is root
 	// [root] copy file to /tmp/keyi.* (mkstemp)
+	// [fork] now we have the editor
 	// [user] exec editor
 	// [root] wait user process quit
 	// [root] copy back if modified, delete tmp
@@ -498,7 +498,7 @@ int main(int argc, char *argv[]) {
 	const char *editor = env_editor();
 
 	// export EDITOR="vim -u NONE"
-	// sh -c '$EDITOR "$@"' vim test.c
+	// sh -c '$EDITOR "$@"' NAME test.c
 
 	char buff[256] = {0};
 	int written = snprintf(buff, sizeof(buff), "%s \"$@\"", editor);

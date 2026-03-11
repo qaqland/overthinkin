@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.16)
 project(keyi VERSION 0.3.1 LANGUAGES C)
 
+if(APPLE)
+    message(FATAL_ERROR "Not supported on macOS.")
+endif()
+
 include(GNUInstallDirs)
 include(CTest)
 
