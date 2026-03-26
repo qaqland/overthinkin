@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="im_chat_v1">
+
+  <interface name="im_chat_manager_v1" version="1">
+    <description summary="simple chat room manager">
+      A global interface that provides a simple multi-user chat room.
+      Clients bind to this interface to join the room, set a nickname,
+      and exchange messages with other participants.
+    </description>
+
+    <!-- Requests (client -> server) -->
+
+    <request name="set_nickname">
+      <description summary="set user nickname">
+        Request to set or change the client's nickname. The server will
+        respond with either nickname_accepted or nickname_rejected.
+        Nicknames must be unique across all connected clients.
+      </description>
+      <arg name="nickname" type="string" summary="desired nickname"/>
+    </request>
+
+    <request name="send_message">
+      <description summary="send a chat message">
+        Send a text message to the chat room. The server will broadcast
+        it to all connected clients including the sender. The client
+        must have a nickname set before sending messages.
+      </description>
+      <arg name="content" type="string" summary="message content"/>
+    </request>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the chat manager binding">
+        Destroy this binding. The server will notify other clients
+        that this user has left the room.
+      </description>
+    </request>
+
+    <!-- Events (server -> client) -->
+
+    <event name="nickname_accepted">
+      <description summary="nickname was accepted">
+        Sent when the requested nickname has been successfully set.
+      </description>
+      <arg name="nickname" type="string" summary="the accepted nickname"/>
+    </event>
+
+    <event name="nickname_rejected">
+      <description summary="nickname was rejected">
+        Sent when the requested nickname could not be set, for example
+        because it is already in use by another client.
+      </description>
+      <arg name="reason" type="string" summary="reason for rejection"/>
+    </event>
+
+    <event name="message">
+      <description summary="a chat message was received">
+        Broadcast to all clients when any client sends a message.
+      </description>
+      <arg name="nickname" type="string" summary="sender nickname"/>
+      <arg name="content" type="string" summary="message content"/>
+    </event>
+
+    <event name="user_joined">
+      <description summary="a user joined the room">
+        Broadcast to all clients when a new user sets their nickname
+        and joins the chat room.
+      </description>
+      <arg name="nickname" type="string" summary="nickname of the user who joined"/>
+    </event>
+
+    <event name="user_left">
+      <description summary="a user left the room">
+        Broadcast to all clients when a user disconnects or destroys
+        their chat manager binding.
+      </description>
+      <arg name="nickname" type="string" summary="nickname of the user who left"/>
+    </event>
+
+  </interface>
+
+</protocol>
