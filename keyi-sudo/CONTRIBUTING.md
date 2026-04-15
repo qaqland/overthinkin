@@ -12,7 +12,7 @@ $ cmake -L -B build
 $ ROOT cmake --install build
 
 $ ROOT chown root:wheel /usr/local/bin/keyi
-$ ROOT chmod u+s /usr/local/bin/keyi
+$ ROOT chmod u+s,o-x /usr/local/bin/keyi
 ```
 
 ## Makefile tests
