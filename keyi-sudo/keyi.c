@@ -455,8 +455,8 @@ int main(int argc, char *argv[]) {
 	stat(exe, &exe_stat);
 	debugx("%s permissions %04o", exe, exe_stat.st_mode & 07777);
 
-	if (exe_stat.st_mode & S_IXOTH) {
-		errx(1, "other-executable bit must not be set");
+	if (exe_stat.st_mode & S_IRWXO) {
+		errx(1, "other permissions must not be set");
 	}
 
 	switch (mode) {
