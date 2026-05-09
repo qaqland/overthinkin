@@ -151,35 +151,13 @@ static void expose_mods(lua_State *L) {
 	}
 }
 
-static int key_tostring(lua_State *L) {
-	SDL_Keycode *v = lua_touserdata(L, 1);
-
+static SDL_Keycode str_to_key(const char *str) {
 	for (int i = 0; KeyNames[i].name; i++) {
-		if (KeyNames[i].code == *v) {
-			lua_pushstring(L, KeyNames[i].name);
-			return 1;
+		if (strcmp(str, KeyNames[i].name) == 0) {
+			return KeyNames[i].code;
 		}
 	}
-
-	lua_pushfstring(L, "Key(%d)", *v);
-	return 1;
-}
-
-static void expose_keys(lua_State *L) {
-	luaL_newmetatable(L, "Key");
-
-	lua_pushcfunction(L, key_tostring);
-	lua_setfield(L, -2, "__tostring");
-
-	lua_pop(L, 1);
-
-	for (int i = 0; KeyNames[i].name; i++) {
-		SDL_Keycode *e = lua_newuserdata(L, sizeof(*e));
-		*e = KeyNames[i].code;
-		luaL_getmetatable(L, "Key");
-		lua_setmetatable(L, -2);
-		lua_setglobal(L, KeyNames[i].name);
-	}
+	return SDLK_UNKNOWN;
 }
 
 static struct KeyBindContext *create_context(SDL_Keymod mod) {
@@ -221,7 +199,7 @@ static void destroy_context(void) {
 	}
 
 	luaL_unref(global_L, LUA_REGISTRYINDEX, active_ctx->lua_ctx_ref);
-	free(active_ctx);
+	SDL_free(active_ctx);
 	active_ctx = NULL;
 }
 
@@ -231,14 +209,19 @@ static int ctx_bind(lua_State *L) {
 		return 0;
 	}
 
-	SDL_Keycode *key = luaL_checkudata(L, 2, "Key");
+	const char *str = luaL_checkstring(L, 2);
+	SDL_Keycode key = str_to_key(str);
+	if (key == SDLK_UNKNOWN) {
+		luaL_error(L, "Unknown key");
+	}
+
 	if (!lua_isfunction(L, 3)) {
 		luaL_error(L, "Expected function as third argument");
 		return 0;
 	}
 
 	for (int i = 0; i < active_ctx->bind_count; i++) {
-		if (active_ctx->binds[i].key == *key) {
+		if (active_ctx->binds[i].key == key) {
 			luaL_unref(L, LUA_REGISTRYINDEX,
 				   active_ctx->binds[i].callback_ref);
 			lua_pushvalue(L, 3);
@@ -256,7 +239,7 @@ static int ctx_bind(lua_State *L) {
 	lua_pushvalue(L, 3);
 	int ref = luaL_ref(L, LUA_REGISTRYINDEX);
 
-	active_ctx->binds[active_ctx->bind_count].key = *key;
+	active_ctx->binds[active_ctx->bind_count].key = key;
 	active_ctx->binds[active_ctx->bind_count].callback_ref = ref;
 	active_ctx->bind_count++;
 
@@ -265,7 +248,11 @@ static int ctx_bind(lua_State *L) {
 
 static int l_bind(lua_State *L) {
 	SDL_Keymod *mod = luaL_checkudata(L, 1, "Mod");
-	SDL_Keycode *key = luaL_checkudata(L, 2, "Key");
+	const char *str = luaL_checkstring(L, 2);
+	SDL_Keycode key = str_to_key(str);
+	if (key == SDLK_UNKNOWN) {
+		luaL_error(L, "Unknown key");
+	}
 
 	if (!lua_isfunction(L, 3)) {
 		luaL_error(L, "Expected function as third argument");
@@ -273,8 +260,7 @@ static int l_bind(lua_State *L) {
 	}
 
 	for (int i = 0; i < global_bind_count; i++) {
-		if (global_binds[i].mod == *mod &&
-		    global_binds[i].key == *key) {
+		if (global_binds[i].mod == *mod && global_binds[i].key == key) {
 			luaL_unref(L, LUA_REGISTRYINDEX,
 				   global_binds[i].callback_ref);
 			lua_pushvalue(L, 3);
@@ -293,7 +279,7 @@ static int l_bind(lua_State *L) {
 	int ref = luaL_ref(L, LUA_REGISTRYINDEX);
 
 	global_binds[global_bind_count].mod = *mod;
-	global_binds[global_bind_count].key = *key;
+	global_binds[global_bind_count].key = key;
 	global_binds[global_bind_count].callback_ref = ref;
 	global_bind_count++;
 
@@ -415,7 +401,6 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
 
 	expose_msg(global_L);
 	expose_mods(global_L);
-	expose_keys(global_L);
 	expose_context_type(global_L);
 	expose_bind(global_L);
 
@@ -442,7 +427,6 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 	SDL_RenderDebugTextFormat(app->renderer, 10, 10, "%s", message);
 	SDL_RenderPresent(app->renderer);
 
-	SDL_Delay(10);
 	return SDL_APP_CONTINUE;
 }
 
