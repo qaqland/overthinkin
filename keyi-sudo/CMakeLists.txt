@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(keyi VERSION 0.3.2 LANGUAGES C)
+project(keyi VERSION 0.3.3 LANGUAGES C)
 
 if(APPLE)
     message(FATAL_ERROR "Not supported on macOS.")
@@ -25,4 +25,10 @@ endif()
 install(
     TARGETS keyi
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+
+install(
+    FILES ${CMAKE_CURRENT_SOURCE_DIR}/keyi.bash
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/bash-completion/completions
+    RENAME keyi
 )
