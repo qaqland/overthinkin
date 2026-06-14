@@ -12,6 +12,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdnoreturn.h>
 #include <string.h>
 #include <sys/sendfile.h>
 #include <sys/stat.h>
@@ -340,7 +341,7 @@ void set_user(void) {
 	}
 }
 
-[[noreturn]] void run_cmd(int argc, char *argv[]) {
+noreturn void run_cmd(int argc, char *argv[]) {
 	env_root();
 	env_opts(argc, argv, true);
 
@@ -361,7 +362,7 @@ void set_user(void) {
 	err(1, "cannot execute command %s", exec_argv);
 }
 
-[[noreturn]] void run_shell(int argc, char *argv[]) {
+noreturn void run_shell(int argc, char *argv[]) {
 	env_root();
 	env_opts(argc, argv, true);
 
