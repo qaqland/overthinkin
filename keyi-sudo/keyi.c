@@ -445,7 +445,7 @@ int main(int argc, char *argv[]) {
 #endif
 	}
 
-	// expected keyi permissions are 4750 or 4754
+	// expected keyi permissions are 4750
 	char exe[PATH_MAX] = {0};
 	ssize_t len = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
 	if (len < 0) {

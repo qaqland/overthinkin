@@ -16,7 +16,7 @@ unit-test: unit-test.c ../keyi.c
 
 keyi: ../keyi.c
 	$(CC) $(CFLAGS) -g $< -o $@
-	chmod u+s,o-x $@
+	chmod 4750 $@
 
 install: keyi
 	install -m 4750 -o root -g wheel keyi /usr/local/bin/
