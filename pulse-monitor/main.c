@@ -488,6 +488,58 @@ static bool query_client(uint32_t idx, struct client_data *d) {
 	return q.s.success;
 }
 
+// query: module
+
+struct module_data {
+	char name[STR_SIZE];
+	char argument[STR_SIZE];
+};
+
+struct module_query {
+	struct sync s;
+	struct module_data d;
+};
+
+static void module_cb(pa_context *c, const pa_module_info *i, int eol,
+		      void *ud) {
+	(void) c;
+	struct module_query *q = ud;
+	if (eol < 0) {
+		q->s.success = false;
+		q->s.done = true;
+		pa_threaded_mainloop_signal(mainloop, 0);
+		return;
+	}
+	if (eol > 0) {
+		q->s.done = true;
+		pa_threaded_mainloop_signal(mainloop, 0);
+		return;
+	}
+	if (!i)
+		return;
+	q->s.success = true;
+	set_str(q->d.name, i->name);
+	set_str(q->d.argument, i->argument);
+}
+
+static bool query_module(uint32_t idx, struct module_data *d) {
+	struct module_query q = {0};
+	pa_threaded_mainloop_lock(mainloop);
+	pa_operation *op =
+		pa_context_get_module_info(context, idx, module_cb, &q);
+	if (!op) {
+		pa_threaded_mainloop_unlock(mainloop);
+		return false;
+	}
+	while (!q.s.done)
+		pa_threaded_mainloop_wait(mainloop);
+	pa_threaded_mainloop_unlock(mainloop);
+	pa_operation_unref(op);
+	if (q.s.success)
+		*d = q.d;
+	return q.s.success;
+}
+
 // output
 
 static const char *facility_str(int f) {
@@ -668,6 +720,17 @@ static void process_event(struct event *ev) {
 		struct client_data d;
 		if (query_client(idx, &d)) {
 			printf(" [%s]", d.name);
+		} else {
+			printf(" (deleted)");
+		}
+		break;
+	}
+	case PA_SUBSCRIPTION_EVENT_MODULE: {
+		struct module_data d;
+		if (query_module(idx, &d)) {
+			printf(" [%s]", d.name);
+			if (d.argument[0])
+				printf(" %s", d.argument);
 		} else {
 			printf(" (deleted)");
 		}
