@@ -1,0 +1,13 @@
+[Unit]
+Description=PulseAudio event monitor
+After=sound.target pulseaudio.service pipewire-pulse.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/pulse-monitor
+Restart=on-failure
+StandardOutput=append:/tmp/pulse-monitor.log
+StandardError=append:/tmp/pulse-monitor.log
+
+[Install]
+WantedBy=default.target

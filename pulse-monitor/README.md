@@ -22,6 +22,22 @@ $ ./build/pulse-monitor
 
 `^C` to quit.
 
+## Systemd user service
+
+`meson install -C build` also installs a user service unit to
+`/etc/systemd/user/pulse-monitor.service`. To enable and start it:
+
+```sh
+$ systemctl --user daemon-reload
+$ systemctl --user enable --now pulse-monitor
+```
+
+View logs with:
+
+```sh
+$ tail -f /tmp/pulse-monitor.log
+```
+
 ## Sample output
 
 ```

@@ -342,6 +342,7 @@ static bool query_so(uint32_t idx, struct so_data *d) {
 struct card_data {
 	char name[STR_SIZE];
 	char profile[STR_SIZE];
+	uint32_t n_profiles;
 };
 
 struct card_query {
@@ -367,12 +368,21 @@ static void card_cb(pa_context *c, const pa_card_info *i, int eol, void *ud) {
 		return;
 	q->s.success = true;
 	set_str(q->d.name, i->name);
-	const char *profile = NULL;
-	if (i->active_profile2)
-		profile = i->active_profile2->name;
-	else if (i->active_profile)
-		profile = i->active_profile->name;
-	set_str(q->d.profile, profile);
+	set_str(q->d.profile,
+		i->active_profile2 ? i->active_profile2->name : NULL);
+	uint32_t n = 0;
+	if (i->profiles2) {
+		for (pa_card_profile_info2 **p = i->profiles2; *p; p++) {
+			if ((*p)->available == 0)
+				continue;
+			const char *name = (*p)->name;
+			if (strcmp(name, "off") == 0 ||
+			    strcmp(name, "pro-audio") == 0)
+				continue;
+			n++;
+		}
+	}
+	q->d.n_profiles = n;
 }
 
 static bool query_card(uint32_t idx, struct card_data *d) {
@@ -699,7 +709,8 @@ static void process_event(struct event *ev) {
 		if (query_card(idx, &d)) {
 			printf(" [%s]", d.name);
 			if (d.profile[0])
-				printf(" profile:%s", d.profile);
+				printf(" profile:%s (%u)", d.profile,
+				       d.n_profiles);
 		} else {
 			printf(" (deleted)");
 		}
