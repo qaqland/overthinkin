@@ -5,346 +5,36 @@
 #include <lauxlib.h>
 #include <lua.h>
 #include <lualib.h>
+#include <stdbool.h>
 
 #define WINDOW_WIDTH 640
 #define WINDOW_HEIGHT 480
-#define MAX_BINDS 256
-#define MAX_LOCAL_BINDS 64
-#define MAX_LOG_LINES 50
 
-struct Mod {
-	SDL_Keymod mask;
-	const char *name;
-};
-
-const struct Mod Mods[] = {
-	{SDL_KMOD_ALT, "ALT"},
-	{SDL_KMOD_CTRL, "CTRL"},
-	{SDL_KMOD_SHIFT, "SHIFT"},
-	{SDL_KMOD_NONE, NULL},
-};
-
-struct KeyName {
-	SDL_Keycode code;
-	const char *name;
-};
-
-const struct KeyName KeyNames[] = {
-	{SDLK_A, "A"}, {SDLK_B, "B"}, {SDLK_C, "C"},	    {SDLK_D, "D"},
-	{SDLK_E, "E"}, {SDLK_F, "F"}, {SDLK_G, "G"},	    {SDLK_H, "H"},
-	{SDLK_I, "I"}, {SDLK_J, "J"}, {SDLK_K, "K"},	    {SDLK_L, "L"},
-	{SDLK_M, "M"}, {SDLK_N, "N"}, {SDLK_O, "O"},	    {SDLK_P, "P"},
-	{SDLK_Q, "Q"}, {SDLK_R, "R"}, {SDLK_S, "S"},	    {SDLK_T, "T"},
-	{SDLK_U, "U"}, {SDLK_V, "V"}, {SDLK_W, "W"},	    {SDLK_X, "X"},
-	{SDLK_Y, "Y"}, {SDLK_Z, "Z"}, {SDLK_UNKNOWN, NULL},
-};
-
-struct LocalBind {
-	SDL_Keycode key;
-	int callback_ref;
-};
-
-struct KeyBindContext {
-	SDL_Keymod trigger_mod;
-	struct LocalBind binds[MAX_LOCAL_BINDS];
-	int bind_count;
-	int lua_ctx_ref;
-	int active;
-};
-
-struct GlobalBind {
-	SDL_Keymod mod;
-	SDL_Keycode key;
-	int callback_ref;
-};
+#define LOCK_MASK (SDL_KMOD_CAPS | SDL_KMOD_NUM | SDL_KMOD_SCROLL)
+#define MSG_INDICATOR_COUNT 8
 
 struct AppState {
 	SDL_Window *window;
 	SDL_Renderer *renderer;
-	struct {
-		SDL_Keymod mod;
-		SDL_Keycode key;
-	} current;
+	lua_State *stack;
+	int preview_index;
+	int selected_index;
 };
 
-static struct GlobalBind global_binds[MAX_BINDS];
-static int global_bind_count = 0;
-static struct KeyBindContext *active_ctx = NULL;
-static lua_State *global_L = NULL;
-
-static char message[245];
-
-static int set_msg(lua_State *L) {
-	const char *msg = luaL_checkstring(L, 1);
-	snprintf(message, sizeof(message), "%s", msg);
-	SDL_Log("%s", msg);
-	return 0;
+static SDL_Keymod normalize_mod(SDL_Keymod mod) {
+	mod &= ~LOCK_MASK;
+	if (mod & SDL_KMOD_CTRL)
+		mod |= SDL_KMOD_CTRL;
+	if (mod & SDL_KMOD_ALT)
+		mod |= SDL_KMOD_ALT;
+	if (mod & SDL_KMOD_GUI)
+		mod |= SDL_KMOD_GUI;
+	if (mod & SDL_KMOD_SHIFT)
+		mod |= SDL_KMOD_SHIFT;
+	return mod;
 }
 
-static void expose_msg(lua_State *L) {
-	lua_pushcfunction(L, set_msg);
-	lua_setglobal(L, "msg");
-}
-
-static int mod_add(lua_State *L) {
-	SDL_Keymod *a = lua_touserdata(L, 1);
-	SDL_Keymod *b = lua_touserdata(L, 2);
-
-	SDL_Keymod *c = lua_newuserdata(L, sizeof(*c));
-	*c = *a | *b;
-
-	luaL_getmetatable(L, "Mod");
-	lua_setmetatable(L, -2);
-	return 1;
-}
-
-static int mod_sub(lua_State *L) {
-	SDL_Keymod *a = lua_touserdata(L, 1);
-	SDL_Keymod *b = lua_touserdata(L, 2);
-
-	SDL_Keymod *c = lua_newuserdata(L, sizeof(*c));
-	*c = *a & ~(*b);
-
-	luaL_getmetatable(L, "Mod");
-	lua_setmetatable(L, -2);
-	return 1;
-}
-
-static int mod_tostring(lua_State *L) {
-	SDL_Keymod *v = lua_touserdata(L, 1);
-
-	char name[1024] = {0};
-	char *ptr = name;
-	for (int i = 0; Mods[i].name; i++) {
-		if (!(*v & Mods[i].mask)) {
-			continue;
-		}
-		int w = snprintf(ptr, sizeof(name) - (ptr - name), "%s%s",
-				 ptr == name ? "" : "+", Mods[i].name);
-		ptr += w;
-	}
-
-	lua_pushstring(L, name);
-	return 1;
-}
-
-static void expose_mods(lua_State *L) {
-	luaL_newmetatable(L, "Mod");
-
-	lua_pushcfunction(L, mod_add);
-	lua_setfield(L, -2, "__add");
-
-	lua_pushcfunction(L, mod_sub);
-	lua_setfield(L, -2, "__sub");
-
-	lua_pushcfunction(L, mod_tostring);
-	lua_setfield(L, -2, "__tostring");
-
-	lua_pop(L, 1);
-
-	for (int i = 0; Mods[i].name; i++) {
-		SDL_Keymod *e = lua_newuserdata(L, sizeof(*e));
-		*e = Mods[i].mask;
-		luaL_getmetatable(L, "Mod");
-		lua_setmetatable(L, -2);
-		lua_setglobal(L, Mods[i].name);
-	}
-}
-
-static SDL_Keycode str_to_key(const char *str) {
-	for (int i = 0; KeyNames[i].name; i++) {
-		if (strcmp(str, KeyNames[i].name) == 0) {
-			return KeyNames[i].code;
-		}
-	}
-	return SDLK_UNKNOWN;
-}
-
-static struct KeyBindContext *create_context(SDL_Keymod mod) {
-	if (active_ctx && active_ctx->trigger_mod == mod) {
-		return active_ctx;
-	}
-
-	if (active_ctx) {
-		for (int i = 0; i < active_ctx->bind_count; i++) {
-			luaL_unref(global_L, LUA_REGISTRYINDEX,
-				   active_ctx->binds[i].callback_ref);
-		}
-		luaL_unref(global_L, LUA_REGISTRYINDEX,
-			   active_ctx->lua_ctx_ref);
-		SDL_free(active_ctx);
-	}
-
-	active_ctx = SDL_calloc(1, sizeof(*active_ctx));
-	active_ctx->trigger_mod = mod;
-	active_ctx->active = 1;
-
-	lua_newtable(global_L);
-	active_ctx->lua_ctx_ref = luaL_ref(global_L, LUA_REGISTRYINDEX);
-
-	lua_rawgeti(global_L, LUA_REGISTRYINDEX, active_ctx->lua_ctx_ref);
-	luaL_getmetatable(global_L, "Context");
-	lua_setmetatable(global_L, -2);
-
-	return active_ctx;
-}
-
-static void destroy_context(void) {
-	if (!active_ctx)
-		return;
-
-	for (int i = 0; i < active_ctx->bind_count; i++) {
-		luaL_unref(global_L, LUA_REGISTRYINDEX,
-			   active_ctx->binds[i].callback_ref);
-	}
-
-	luaL_unref(global_L, LUA_REGISTRYINDEX, active_ctx->lua_ctx_ref);
-	SDL_free(active_ctx);
-	active_ctx = NULL;
-}
-
-static int ctx_bind(lua_State *L) {
-	if (!active_ctx) {
-		luaL_error(L, "No active context");
-		return 0;
-	}
-
-	const char *str = luaL_checkstring(L, 2);
-	SDL_Keycode key = str_to_key(str);
-	if (key == SDLK_UNKNOWN) {
-		luaL_error(L, "Unknown key");
-	}
-
-	if (!lua_isfunction(L, 3)) {
-		luaL_error(L, "Expected function as third argument");
-		return 0;
-	}
-
-	for (int i = 0; i < active_ctx->bind_count; i++) {
-		if (active_ctx->binds[i].key == key) {
-			luaL_unref(L, LUA_REGISTRYINDEX,
-				   active_ctx->binds[i].callback_ref);
-			lua_pushvalue(L, 3);
-			active_ctx->binds[i].callback_ref =
-				luaL_ref(L, LUA_REGISTRYINDEX);
-			return 0;
-		}
-	}
-
-	if (active_ctx->bind_count >= MAX_LOCAL_BINDS) {
-		luaL_error(L, "Too many local binds");
-		return 0;
-	}
-
-	lua_pushvalue(L, 3);
-	int ref = luaL_ref(L, LUA_REGISTRYINDEX);
-
-	active_ctx->binds[active_ctx->bind_count].key = key;
-	active_ctx->binds[active_ctx->bind_count].callback_ref = ref;
-	active_ctx->bind_count++;
-
-	return 0;
-}
-
-static int l_bind(lua_State *L) {
-	SDL_Keymod *mod = luaL_checkudata(L, 1, "Mod");
-	const char *str = luaL_checkstring(L, 2);
-	SDL_Keycode key = str_to_key(str);
-	if (key == SDLK_UNKNOWN) {
-		luaL_error(L, "Unknown key");
-	}
-
-	if (!lua_isfunction(L, 3)) {
-		luaL_error(L, "Expected function as third argument");
-		return 0;
-	}
-
-	for (int i = 0; i < global_bind_count; i++) {
-		if (global_binds[i].mod == *mod && global_binds[i].key == key) {
-			luaL_unref(L, LUA_REGISTRYINDEX,
-				   global_binds[i].callback_ref);
-			lua_pushvalue(L, 3);
-			global_binds[i].callback_ref =
-				luaL_ref(L, LUA_REGISTRYINDEX);
-			return 0;
-		}
-	}
-
-	if (global_bind_count >= MAX_BINDS) {
-		luaL_error(L, "Too many global binds");
-		return 0;
-	}
-
-	lua_pushvalue(L, 3);
-	int ref = luaL_ref(L, LUA_REGISTRYINDEX);
-
-	global_binds[global_bind_count].mod = *mod;
-	global_binds[global_bind_count].key = key;
-	global_binds[global_bind_count].callback_ref = ref;
-	global_bind_count++;
-
-	return 0;
-}
-
-static void expose_context_type(lua_State *L) {
-	luaL_newmetatable(L, "Context");
-
-	lua_pushvalue(L, -1);
-	lua_setfield(L, -2, "__index");
-
-	lua_pushcfunction(L, ctx_bind);
-	lua_setfield(L, -2, "bind");
-
-	lua_pop(L, 1);
-}
-
-static void expose_bind(lua_State *L) {
-	lua_pushcfunction(L, l_bind);
-	lua_setglobal(L, "bind");
-}
-
-static void call_lua_callback(int callback_ref) {
-	lua_rawgeti(global_L, LUA_REGISTRYINDEX, callback_ref);
-	if (lua_isfunction(global_L, -1)) {
-		if (active_ctx) {
-			lua_rawgeti(global_L, LUA_REGISTRYINDEX,
-				    active_ctx->lua_ctx_ref);
-		} else {
-			lua_pushnil(global_L);
-		}
-		if (lua_pcall(global_L, 1, 0, 0) != LUA_OK) {
-			SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-				     "Lua callback error: %s",
-				     lua_tostring(global_L, -1));
-			lua_pop(global_L, 1);
-		}
-	} else {
-		lua_pop(global_L, 1);
-	}
-}
-
-static void handle_key_down(SDL_Keycode key, SDL_Keymod mod) {
-	if (active_ctx) {
-		for (int i = 0; i < active_ctx->bind_count; i++) {
-			if (active_ctx->binds[i].key == key) {
-				call_lua_callback(
-					active_ctx->binds[i].callback_ref);
-				return;
-			}
-		}
-	}
-
-	for (int i = 0; i < global_bind_count; i++) {
-		if ((global_binds[i].mod & mod) &&
-		    (global_binds[i].key == key)) {
-			create_context(global_binds[i].mod);
-			call_lua_callback(global_binds[i].callback_ref);
-			return;
-		}
-	}
-}
-
-static SDL_Keymod keycode_to_mod(SDL_Keycode key) {
+static SDL_Keymod context_mod_from_key(SDL_Keycode key) {
 	switch (key) {
 	case SDLK_LCTRL:
 	case SDLK_RCTRL:
@@ -352,23 +42,88 @@ static SDL_Keymod keycode_to_mod(SDL_Keycode key) {
 	case SDLK_LALT:
 	case SDLK_RALT:
 		return SDL_KMOD_ALT;
-	case SDLK_LSHIFT:
-	case SDLK_RSHIFT:
-		return SDL_KMOD_SHIFT;
+	case SDLK_LGUI:
+	case SDLK_RGUI:
+		return SDL_KMOD_GUI;
 	default:
 		return SDL_KMOD_NONE;
 	}
 }
 
-static void handle_key_up(SDL_Keycode key) {
-	SDL_Keymod released_mod = keycode_to_mod(key);
-	if (released_mod == SDL_KMOD_NONE)
-		return;
+static int clamp_index(int n) {
+	if (n < 1)
+		return 1;
+	if (n > MSG_INDICATOR_COUNT)
+		return MSG_INDICATOR_COUNT;
+	return n;
+}
 
-	if (active_ctx && (active_ctx->trigger_mod & released_mod)) {
-		message[0] = '\0';
-		destroy_context();
+static int preview(lua_State *L) {
+	struct AppState *app = lua_touserdata(L, lua_upvalueindex(1));
+	int n = luaL_checkinteger(L, 1);
+	app->preview_index = clamp_index(n);
+	return 0;
+}
+
+static int commit(lua_State *L) {
+	struct AppState *app = lua_touserdata(L, lua_upvalueindex(1));
+	int n = luaL_checkinteger(L, 1);
+	app->selected_index = clamp_index(n);
+	app->preview_index = 0;
+	return 0;
+}
+
+static void push_app_closure(lua_State *L, lua_CFunction fn, void *data) {
+	lua_pushlightuserdata(L, data);
+	lua_pushcclosure(L, fn, 1);
+}
+
+static void expose_module(lua_State *L, void *data) {
+	lua_newtable(L);
+
+	push_app_closure(L, preview, data);
+	lua_setfield(L, -2, "preview");
+
+	push_app_closure(L, commit, data);
+	lua_setfield(L, -2, "commit");
+
+	lua_setglobal(L, "aa");
+}
+
+static void expose_mods(lua_State *L) {
+	lua_pushinteger(L, SDL_KMOD_CTRL);
+	lua_setglobal(L, "CTRL");
+
+	lua_pushinteger(L, SDL_KMOD_ALT);
+	lua_setglobal(L, "ALT");
+
+	lua_pushinteger(L, SDL_KMOD_GUI);
+	lua_setglobal(L, "SUPER");
+
+	lua_pushinteger(L, SDL_KMOD_SHIFT);
+	lua_setglobal(L, "SHIFT");
+}
+
+static const char key_lua_source[] = {
+#embed "key.lua"
+	, 0};
+
+static bool load_embedded_key_lua(lua_State *L) {
+	size_t len = sizeof(key_lua_source) - 1;
+
+	if (luaL_loadbuffer(L, key_lua_source, len, "key.lua") != LUA_OK) {
+		SDL_Log("Failed to load key.lua: %s", lua_tostring(L, -1));
+		lua_pop(L, 1);
+		return false;
 	}
+
+	if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
+		SDL_Log("Failed to run key.lua: %s", lua_tostring(L, -1));
+		lua_pop(L, 1);
+		return false;
+	}
+
+	return true;
 }
 
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
@@ -376,6 +131,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
 	(void) argv;
 
 	SDL_SetLogPriority(SDL_LOG_CATEGORY_APPLICATION, SDL_LOG_PRIORITY_INFO);
+	SDL_SetHint(SDL_HINT_MAIN_CALLBACK_RATE, "60");
 
 	if (!SDL_Init(SDL_INIT_VIDEO)) {
 		SDL_Log("SDL_Init failed: %s", SDL_GetError());
@@ -383,6 +139,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
 	}
 
 	struct AppState *app = SDL_calloc(1, sizeof(*app));
+	app->selected_index = 1;
 	*appstate = app;
 
 	if (!SDL_CreateWindowAndRenderer("Lua Keybind", WINDOW_WIDTH,
@@ -396,20 +153,22 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
 					 WINDOW_HEIGHT,
 					 SDL_LOGICAL_PRESENTATION_LETTERBOX);
 
-	global_L = luaL_newstate();
-	luaL_openlibs(global_L);
+	app->stack = luaL_newstate();
+	luaL_openlibs(app->stack);
 
-	expose_msg(global_L);
-	expose_mods(global_L);
-	expose_context_type(global_L);
-	expose_bind(global_L);
+	expose_module(app->stack, app);
+	expose_mods(app->stack);
 
-	const char *script_file = "key.lua";
-	if (luaL_dofile(global_L, script_file) != LUA_OK) {
-		SDL_Log("Lua error: %s", lua_tostring(global_L, -1));
-		lua_pop(global_L, 1);
+	if (!load_embedded_key_lua(app->stack)) {
 		return SDL_APP_FAILURE;
 	}
+
+	if (luaL_dofile(app->stack, "user.lua") != LUA_OK) {
+		SDL_Log("Lua error: %s", lua_tostring(app->stack, -1));
+		lua_pop(app->stack, 1);
+		return SDL_APP_FAILURE;
+	}
+
 	SDL_Log("Lua script loaded successfully");
 	return SDL_APP_CONTINUE;
 }
@@ -420,14 +179,86 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 	SDL_SetRenderDrawColor(app->renderer, 0, 0, 0, 255);
 	SDL_RenderClear(app->renderer);
 
-	const float scale = 2.0f;
-	SDL_SetRenderScale(app->renderer, scale, scale);
 	SDL_SetRenderDrawColor(app->renderer, 255, 255, 255, 255);
 
-	SDL_RenderDebugTextFormat(app->renderer, 10, 10, "%s", message);
+	const float text_scale = 2.0f;
+	const float text_y = 40.0f;
+	const float text_x = 40.0f;
+	const float line_h = SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE * 1.6;
+
+	SDL_SetRenderScale(app->renderer, text_scale, text_scale);
+	SDL_RenderDebugTextFormat(app->renderer, text_x, text_y + line_h * 0,
+				  ">>> lua-keybind");
+
+	SDL_RenderDebugTextFormat(app->renderer, text_x, text_y + line_h * 2,
+				  "Ctrl       Tab       next");
+	SDL_RenderDebugTextFormat(app->renderer, text_x, text_y + line_h * 3,
+				  "Ctrl+Shift Tab       prev");
+	SDL_RenderDebugTextFormat(app->renderer, text_x, text_y + line_h * 4,
+				  "Ctrl       `  (ctx)  prev");
+	SDL_RenderDebugTextFormat(app->renderer, text_x, text_y + line_h * 5,
+				  "Ctrl       `  (idle) reset");
+	SDL_SetRenderScale(app->renderer, 1.0f, 1.0f);
+
+	const float bar_width = WINDOW_WIDTH * 0.8f;
+	const int gap = 4;
+	const float bottom_margin = 40.0f;
+	const float rect_w = (bar_width - (MSG_INDICATOR_COUNT - 1) * gap) /
+			     MSG_INDICATOR_COUNT;
+	const float rect_h = rect_w * 3.0f / 4.0f;
+	const float start_x = (WINDOW_WIDTH - bar_width) / 2.0f;
+	const float y = WINDOW_HEIGHT - rect_h - bottom_margin;
+
+	for (int i = 0; i < MSG_INDICATOR_COUNT; i++) {
+		SDL_FRect rect = {
+			.x = start_x + i * (rect_w + gap),
+			.y = y,
+			.w = rect_w,
+			.h = rect_h,
+		};
+		int idx = i + 1;
+		bool is_selected = (idx == app->selected_index);
+		bool is_preview = (idx == app->preview_index);
+
+		if (is_selected) {
+			SDL_SetRenderDrawColor(app->renderer, 255, 255, 255,
+					       255);
+			SDL_RenderFillRect(app->renderer, &rect);
+		} else if (is_preview) {
+			SDL_SetRenderDrawColor(app->renderer, 128, 128, 128,
+					       255);
+			SDL_RenderFillRect(app->renderer, &rect);
+			SDL_SetRenderDrawColor(app->renderer, 255, 255, 255,
+					       255);
+			SDL_RenderRect(app->renderer, &rect);
+		} else {
+			SDL_SetRenderDrawColor(app->renderer, 255, 255, 255,
+					       255);
+			SDL_RenderRect(app->renderer, &rect);
+		}
+	}
+
 	SDL_RenderPresent(app->renderer);
 
 	return SDL_APP_CONTINUE;
+}
+
+static void call_lua_key_handler(lua_State *L, const char *fn_name,
+				 const char *key_name, SDL_Keymod mod) {
+	lua_getglobal(L, fn_name);
+	if (!lua_isfunction(L, -1)) {
+		lua_pop(L, 1);
+		return;
+	}
+
+	lua_pushstring(L, key_name);
+	lua_pushinteger(L, mod);
+
+	if (lua_pcall(L, 2, 0, 0) != LUA_OK) {
+		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Lua error: %s",
+			     lua_tostring(L, -1));
+		lua_pop(L, 1);
+	}
 }
 
 SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
@@ -436,23 +267,19 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 	switch (event->type) {
 	case SDL_EVENT_QUIT:
 		return SDL_APP_SUCCESS;
-
 	case SDL_EVENT_KEY_DOWN:
-		if (event->key.key == SDLK_ESCAPE) {
+		if (event->key.key == SDLK_ESCAPE)
 			return SDL_APP_SUCCESS;
-		}
-		app->current.mod = event->key.mod;
-		app->current.key = event->key.key;
-		if (event->key.repeat) {
+		if (event->key.repeat)
 			break;
-		}
-		handle_key_down(event->key.key, event->key.mod);
+		call_lua_key_handler(app->stack, "on_key_down",
+				     SDL_GetKeyName(event->key.key),
+				     normalize_mod(event->key.mod));
 		break;
-
 	case SDL_EVENT_KEY_UP:
-		app->current.mod = event->key.mod;
-		app->current.key = SDLK_UNKNOWN;
-		handle_key_up(event->key.key);
+		call_lua_key_handler(app->stack, "on_key_up",
+				     SDL_GetKeyName(event->key.key),
+				     context_mod_from_key(event->key.key));
 		break;
 	}
 
@@ -463,25 +290,13 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result) {
 	struct AppState *app = appstate;
 	(void) result;
 
-	destroy_context();
-
-	for (int i = 0; i < global_bind_count; i++) {
-		luaL_unref(global_L, LUA_REGISTRYINDEX,
-			   global_binds[i].callback_ref);
-	}
-
-	if (global_L) {
-		lua_close(global_L);
-	}
-
-	if (app->renderer) {
+	if (app->stack)
+		lua_close(app->stack);
+	if (app->renderer)
 		SDL_DestroyRenderer(app->renderer);
-	}
-
-	if (app->window) {
+	if (app->window)
 		SDL_DestroyWindow(app->window);
-	}
 
-	SDL_free(appstate);
+	SDL_free(app);
 	SDL_Quit();
 }
