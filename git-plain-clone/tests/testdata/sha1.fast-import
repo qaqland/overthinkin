@@ -1,0 +1,104 @@
+blob
+mark :1
+data <<EOF_DATA
+hello main
+EOF_DATA
+
+blob
+mark :2
+data <<EOF_DATA
+#!/bin/sh
+echo hello
+EOF_DATA
+
+blob
+mark :3
+data <<EOF_DATA
+version main
+EOF_DATA
+
+blob
+mark :4
+data <<EOF_DATA
+nested content
+EOF_DATA
+
+blob
+mark :5
+data <<EOF_DATA
+docs readme
+EOF_DATA
+
+blob
+mark :6
+data 6
+target
+commit refs/heads/main
+mark :10
+author Test User <test@example.com> 1700000000 +0000
+committer Test User <test@example.com> 1700000000 +0000
+data <<EOF_DATA
+initial main commit
+EOF_DATA
+M 100644 :1 README.md
+M 100755 :2 run.sh
+M 100644 :3 VERSION.txt
+M 100644 :4 src/nested/file.c
+M 100644 :5 docs/README.md
+M 120000 :6 link
+
+blob
+mark :7
+data <<EOF_DATA
+hello feature
+EOF_DATA
+
+blob
+mark :8
+data <<EOF_DATA
+version feature
+EOF_DATA
+
+commit refs/heads/feature
+mark :11
+author Test User <test@example.com> 1700000100 +0000
+committer Test User <test@example.com> 1700000100 +0000
+data <<EOF_DATA
+feature commit
+EOF_DATA
+from :10
+M 100644 :7 README.md
+M 100644 :8 VERSION.txt
+
+blob
+mark :9
+data <<EOF_DATA
+hello release branch
+EOF_DATA
+
+commit refs/heads/release
+mark :12
+author Test User <test@example.com> 1700000150 +0000
+committer Test User <test@example.com> 1700000150 +0000
+data <<EOF_DATA
+release branch commit
+EOF_DATA
+from :11
+M 100644 :9 README.md
+
+commit refs/heads/with-submodule
+mark :13
+author Test User <test@example.com> 1700000160 +0000
+committer Test User <test@example.com> 1700000160 +0000
+data <<EOF_DATA
+gitlink commit
+EOF_DATA
+from :10
+M 160000 0000000000000000000000000000000000000000 deps/submodule
+
+tag v1.0
+from :10
+tagger Test User <test@example.com> 1700000200 +0000
+data <<EOF_DATA
+version 1.0 annotated
+EOF_DATA

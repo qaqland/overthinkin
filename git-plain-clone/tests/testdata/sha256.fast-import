@@ -1,0 +1,21 @@
+blob
+mark :1
+data <<EOF_DATA
+hello sha256
+EOF_DATA
+
+blob
+mark :2
+data <<EOF_DATA
+sha256 nested
+EOF_DATA
+
+commit refs/heads/main
+mark :10
+author Test User <test@example.com> 1700000000 +0000
+committer Test User <test@example.com> 1700000000 +0000
+data <<EOF_DATA
+initial sha256 commit
+EOF_DATA
+M 100644 :1 README.md
+M 100644 :2 src/file.txt
