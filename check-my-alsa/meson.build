@@ -19,6 +19,7 @@ sources = files(
     'app-latency.c',
     'app-recover.c',
     'app-play.c',
+    'app-suspend.c',
     'alsa-pcm.c',
     'alsa-pcm-sink.c',
 )

@@ -543,6 +543,8 @@ int alsa_recover(struct alsa_state *state) {
 	int res, st, retry = 0;
 	snd_pcm_status_t *status;
 
+	/* deviation: test-only recovery counter */
+	state->recoveries++;
 	snd_pcm_status_alloca(&status);
 	if ((res = snd_pcm_status(state->hndl, status)) < 0) {
 		log_error("snd_pcm_status failed during recovery: %s",

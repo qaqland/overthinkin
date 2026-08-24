@@ -21,6 +21,7 @@ applets:
   latency  measure playback clock drift and reported delay
   play     playback smoke test (PipeWire path)
   recover  test PCM XRUN recovery behaviour (PipeWire alsa_recover)
+  suspend  test PCM recovery across a system suspend/resume
   xrun     monitor XRUN (under/overrun) events
 
 run 'check-my-alsa <applet> -h' for applet-specific options.

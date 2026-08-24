@@ -158,6 +158,7 @@ struct alsa_state {
 	uint64_t xrun;
 
 	/* test-only counters, no pipewire equivalent */
+	unsigned int recoveries;
 	unsigned int recover_fails;
 	/* pipewire: "snd_pcm_avail after recover" counter (0 suppressed) */
 	unsigned int avail_recover_fails;
