@@ -98,7 +98,7 @@ const struct applet *applet_find(const char *name);
 /* --- pcm test configuration --- */
 
 struct pcm_setup {
-	const char *dev; /* -D, default "default" */
+	const char *dev; /* -D, required hardware PCM name */
 	unsigned int rate;
 	unsigned int channels;
 	snd_pcm_format_t format;

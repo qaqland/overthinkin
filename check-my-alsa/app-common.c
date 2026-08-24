@@ -180,6 +180,13 @@ bool pcm_setup_parse_opt(struct pcm_setup *s, int opt, const char *arg) {
 
 	switch (opt) {
 	case 'D':
+		if (strcmp(arg, "default") == 0) {
+			fprintf(stderr,
+				"invalid device argument '%s' "
+				"(use a hardware PCM hw:N[,P])\n",
+				arg);
+			return false;
+		}
 		s->dev = arg;
 		break;
 	case 'r':
