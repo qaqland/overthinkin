@@ -102,7 +102,6 @@ static int recover_run(int argc, char **argv) {
 
 	pcm_setup_defaults(&cfg);
 	cfg.period = 256; /* small quantum: xrun is easy to trigger */
-	cfg.buffer = 512;
 
 	int iterations = 3;
 	int verbose = 0;

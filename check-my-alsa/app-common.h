@@ -91,7 +91,7 @@ const struct applet *applet_find(const char *name);
  * functionality.  Keep in sync with pcm_setup_parse_opt() (the switch
  * on the short character) and pcm_setup_usage(). */
 
-#define PCM_OPTSTRING "D:r:c:f:p:b:d:"
+#define PCM_OPTSTRING "D:r:c:f:p:d:"
 #define CARD_OPTSTRING "c:"
 #define COMMON_OPTSTRING "vh"
 
@@ -103,7 +103,6 @@ struct pcm_setup {
 	unsigned int channels;
 	snd_pcm_format_t format;
 	snd_pcm_uframes_t period;
-	snd_pcm_uframes_t buffer;
 	unsigned int duration_sec; /* 0 = run until stopped */
 };
 

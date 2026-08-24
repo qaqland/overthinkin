@@ -131,7 +131,6 @@ void pcm_setup_defaults(struct pcm_setup *s) {
 	s->channels = 2;
 	s->format = SND_PCM_FORMAT_S16_LE;
 	s->period = 1024;
-	s->buffer = 0;
 	s->duration_sec = 30;
 }
 
@@ -228,17 +227,6 @@ bool pcm_setup_parse_opt(struct pcm_setup *s, int opt, const char *arg) {
 		}
 		s->period = (snd_pcm_uframes_t) val;
 		break;
-	case 'b':
-		val = parse_long(arg, "buffer-size", &err);
-		if (err < 0)
-			return false;
-		if (val < 0) {
-			fprintf(stderr, "invalid buffer-size argument '%s'\n",
-				arg);
-			return false;
-		}
-		s->buffer = (snd_pcm_uframes_t) val;
-		break;
 	case 'd':
 		val = parse_long(arg, "duration", &err);
 		if (err < 0)
@@ -263,7 +251,6 @@ void pcm_setup_usage(const char *prog) {
 	usage_opt("-c CHANNELS", "channels (default 2)");
 	usage_opt("-f FORMAT", "sample format (default S16_LE)");
 	usage_opt("-p PERIOD", "period size in frames (default 1024)");
-	usage_opt("-b BUFFER", "accepted but ignored (driver-derived buffer)");
 	usage_opt("-d DURATION",
 		  "test duration in seconds (0 = infinite, default 30)");
 }
