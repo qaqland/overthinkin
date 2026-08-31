@@ -393,6 +393,8 @@ noreturn void run_shell(int argc, char *argv[]) {
 }
 
 int main(int argc, char *argv[]) {
+	openlog(PROG_NAME, LOG_PID, LOG_AUTH);
+
 	enum keyi_mode mode = KEYI_CMD;
 
 	optind = env_opts(argc, argv, false);
