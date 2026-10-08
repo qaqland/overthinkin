@@ -1,0 +1,30 @@
+[package]
+name = "ssh-auto-port"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "ssh-auto-port"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+globset = "0.4"
+rpassword = "7"
+russh = "0.64"
+russh-config = "0.58"
+tokio = { version = "1", features = [
+    "macros",
+    "rt-multi-thread",
+    "net",
+    "io-util",
+    "time",
+] }
+tokio-util = { version = "0.7", features = ["rt"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.release]
+opt-level = "z"
+strip = "symbols"
