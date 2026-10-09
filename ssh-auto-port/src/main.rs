@@ -20,7 +20,7 @@ use cli::Cli;
 use forward::ForwardManager;
 use probe::{parse_frame, read_frame, PROBE_SCRIPT};
 use russh::client::{self, Handle};
-use russh::keys::agent::client::AgentClient;
+use russh::keys::agent::client::{AgentClient, AgentStream};
 use russh::keys::agent::AgentIdentity;
 use russh::keys::{
     check_known_hosts_path, load_secret_key, PrivateKeyWithHashAlg, PublicKeyOrCertificate,
@@ -251,6 +251,21 @@ async fn connect_and_auth(
     Ok(Arc::new(handle))
 }
 
+type DynAgent = AgentClient<Box<dyn AgentStream + Send + Unpin>>;
+
+#[cfg(unix)]
+async fn connect_agent() -> Result<DynAgent, russh::keys::Error> {
+    Ok(AgentClient::connect_env().await?.dynamic())
+}
+
+// Windows: connect to the built-in OpenSSH agent's named pipe.
+#[cfg(windows)]
+async fn connect_agent() -> Result<DynAgent, russh::keys::Error> {
+    AgentClient::connect_named_pipe(r"\\.\pipe\openssh-ssh-agent")
+        .await
+        .map(AgentClient::dynamic)
+}
+
 /// Try IdentityFile entries, then ssh-agent.
 /// Key files must be unencrypted; no password prompts.
 async fn authenticate(
@@ -292,7 +307,7 @@ async fn authenticate(
         }
     }
 
-    match AgentClient::connect_env().await {
+    match connect_agent().await {
         Ok(mut agent) => match agent.request_identities().await {
             Ok(identities) => {
                 for identity in &identities {
