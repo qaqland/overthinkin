@@ -1,14 +1,15 @@
 use std::collections::{BTreeSet, HashMap};
+use std::io::ErrorKind;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use anyhow::{Context, Result};
 use russh::client::Handle;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::{JoinHandle, JoinSet};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
-use crate::cli::OnConflict;
 use crate::Handler;
 
 const RETRY_DELAY: Duration = Duration::from_secs(30);
@@ -37,7 +38,8 @@ enum ForwardSetup {
     RetryLater,
 }
 
-pub(crate) struct ForwardManager {
+#[derive(Default)]
+pub struct ForwardManager {
     desired: BTreeSet<u16>,
     forwards: HashMap<u16, Forward>,
     skipped: BTreeSet<u16>,
@@ -45,22 +47,12 @@ pub(crate) struct ForwardManager {
 }
 
 impl ForwardManager {
-    pub(crate) fn new() -> Self {
-        Self {
-            desired: BTreeSet::new(),
-            forwards: HashMap::new(),
-            skipped: BTreeSet::new(),
-            retry_at: HashMap::new(),
-        }
-    }
-
-    pub(crate) async fn reconcile(
+    pub async fn reconcile(
         &mut self,
         session: &Arc<Handle<Handler>>,
         target: BTreeSet<u16>,
-        on_conflict: OnConflict,
-    ) -> bool {
-        let changed = self.desired != target;
+        skip: bool,
+    ) {
         let removed: Vec<u16> = self.desired.difference(&target).copied().collect();
 
         for port in removed {
@@ -87,83 +79,116 @@ impl ForwardManager {
             .collect();
 
         for port in pending {
-            match add_forward(session, port, on_conflict).await {
-                ForwardSetup::Started(forward) => {
+            match add_forward(session, port, skip).await {
+                Ok(ForwardSetup::Started(forward)) => {
                     self.forwards.insert(port, forward);
                     self.retry_at.remove(&port);
                 }
-                ForwardSetup::Skipped => {
+                Ok(ForwardSetup::Skipped) => {
                     self.skipped.insert(port);
                     self.retry_at.remove(&port);
                 }
-                ForwardSetup::RetryLater => {
+                Ok(ForwardSetup::RetryLater) => {
+                    self.retry_at.insert(port, now + RETRY_DELAY);
+                }
+                Err(error) => {
+                    warn!(
+                        "cannot forward remote :{port}: {error:#}; retrying in {}s",
+                        RETRY_DELAY.as_secs()
+                    );
                     self.retry_at.insert(port, now + RETRY_DELAY);
                 }
             }
         }
 
         self.desired = target;
-        changed
     }
 
-    pub(crate) async fn stop_all(&mut self) {
-        let forwards = std::mem::take(&mut self.forwards);
-        for (port, forward) in forwards {
+    pub async fn stop_all(self) {
+        for (port, forward) in self.forwards {
             forward.stop().await;
             debug!("tore down forward for remote :{port}");
         }
-        self.desired.clear();
-        self.skipped.clear();
-        self.retry_at.clear();
     }
 }
 
-async fn try_bind(port: u16) -> Option<TcpListener> {
+async fn try_bind(port: u16) -> Result<Option<TcpListener>> {
     match TcpListener::bind(("127.0.0.1", port)).await {
-        Ok(listener) => Some(listener),
-        Err(error) => {
-            debug!("bind 127.0.0.1:{port} failed: {error}");
-            None
-        }
+        Ok(listener) => Ok(Some(listener)),
+        Err(error) if error.kind() == ErrorKind::AddrInUse => Ok(None),
+        Err(error) => Err(error).with_context(|| format!("bind 127.0.0.1:{port} failed")),
     }
+}
+
+#[cfg(test)]
+#[tokio::test]
+async fn occupied_port_is_a_conflict() {
+    let listener = try_bind(0).await.unwrap().unwrap();
+    let port = listener.local_addr().unwrap().port();
+    assert!(try_bind(port).await.unwrap().is_none());
+    drop(listener);
+    assert!(try_bind(port).await.unwrap().is_some());
+}
+
+#[cfg(test)]
+#[tokio::test]
+async fn stop_all_cancels_and_waits_for_listeners() {
+    let listener = try_bind(0).await.unwrap().unwrap();
+    let local_port = listener.local_addr().unwrap().port();
+    let cancellation = CancellationToken::new();
+    let cancelled = cancellation.clone();
+    let task = tokio::spawn(async move {
+        cancelled.cancelled().await;
+        drop(listener);
+    });
+    let mut manager = ForwardManager::default();
+    manager.forwards.insert(
+        local_port,
+        Forward {
+            local_port,
+            cancellation: cancellation.clone(),
+            task,
+        },
+    );
+    manager.stop_all().await;
+    assert!(cancellation.is_cancelled());
+    assert!(try_bind(local_port).await.unwrap().is_some());
 }
 
 /// Nearest free local port: +1, -1, +2, -2, ... within 1024-65535.
-async fn find_free_near(port: u16) -> Option<(TcpListener, u16)> {
+async fn find_free_near(port: u16) -> Result<Option<(TcpListener, u16)>> {
     for offset in 1..=REMAP_SEARCH_RADIUS {
         for candidate in [port as u32 + offset, (port as u32).saturating_sub(offset)] {
             if (MIN_REMAP_PORT..=MAX_REMAP_PORT).contains(&candidate) {
-                if let Some(listener) = try_bind(candidate as u16).await {
-                    return Some((listener, candidate as u16));
+                if let Some(listener) = try_bind(candidate as u16).await? {
+                    return Ok(Some((listener, candidate as u16)));
                 }
             }
         }
     }
-    None
+    Ok(None)
 }
 
 async fn add_forward(
     session: &Arc<Handle<Handler>>,
     port: u16,
-    on_conflict: OnConflict,
-) -> ForwardSetup {
-    let (listener, local_port, remapped) = match try_bind(port).await {
+    skip: bool,
+) -> Result<ForwardSetup> {
+    let (listener, local_port, remapped) = match try_bind(port).await? {
         Some(listener) => (listener, port, false),
-        None => match on_conflict {
-            OnConflict::Skip => {
-                warn!("cannot bind local port {port}; skipping forward for remote :{port}");
-                return ForwardSetup::Skipped;
+        None if skip => {
+            warn!("cannot bind local port {port}; skipping forward for remote :{port}");
+            return Ok(ForwardSetup::Skipped);
+        }
+        None => match find_free_near(port).await? {
+            Some((listener, local_port)) => (listener, local_port, true),
+            None => {
+                warn!(
+                    "no free local port near {port}; retrying forward for remote :{port} in {}s",
+                    RETRY_DELAY.as_secs()
+                );
+                return Ok(ForwardSetup::RetryLater);
             }
-            OnConflict::Remap => match find_free_near(port).await {
-                Some((listener, local_port)) => (listener, local_port, true),
-                None => {
-                    warn!(
-                        "no free local port near {port}; retrying forward for remote :{port} in {}s",
-                        RETRY_DELAY.as_secs()
-                    );
-                    return ForwardSetup::RetryLater;
-                }
-            },
         },
     };
 
@@ -180,11 +205,11 @@ async fn add_forward(
         port,
         cancellation.clone(),
     ));
-    ForwardSetup::Started(Forward {
+    Ok(ForwardSetup::Started(Forward {
         local_port,
         cancellation,
         task,
-    })
+    }))
 }
 
 /// Accept local connections and track all direct-tcpip tasks so a removed

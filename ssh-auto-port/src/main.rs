@@ -16,15 +16,14 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
-use cli::{Cli, OnConflict};
+use cli::Cli;
 use forward::ForwardManager;
-use probe::{parse_frame, read_frame, Adaptive, PROBE_SCRIPT};
+use probe::{parse_frame, read_frame, PROBE_SCRIPT};
 use russh::client::{self, Handle};
 use russh::keys::agent::client::AgentClient;
 use russh::keys::agent::AgentIdentity;
 use russh::keys::{
-    check_known_hosts_path, load_secret_key, PrivateKey, PrivateKeyWithHashAlg,
-    PublicKeyOrCertificate,
+    check_known_hosts_path, load_secret_key, PrivateKeyWithHashAlg, PublicKeyOrCertificate,
 };
 use tracing::{debug, error, info, warn};
 
@@ -34,7 +33,7 @@ use tracing::{debug, error, info, warn};
 
 /// Make sure `alias` is a plain Host alias that actually matches some `Host`
 /// entry in ~/.ssh/config (including `Host *` wildcards). Reject user@host.
-fn ensure_host_alias(alias: &str) -> Result<PathBuf> {
+fn load_config(alias: &str) -> Result<russh_config::Config> {
     let config_path = home_dir()?.join(".ssh").join("config");
 
     if alias.contains('@') || alias.contains('/') || alias.contains(':') {
@@ -57,7 +56,7 @@ fn ensure_host_alias(alias: &str) -> Result<PathBuf> {
             config_path.display()
         );
     }
-    Ok(config_path)
+    russh_config::parse(&text, alias).context("failed to parse ~/.ssh/config")
 }
 
 fn has_matching_host_alias(config: &str, alias: &str) -> bool {
@@ -118,7 +117,7 @@ enum KeyVerdict {
     Error(String),
 }
 
-pub(crate) struct Handler {
+pub struct Handler {
     host: String,
     port: u16,
     known_hosts: PathBuf,
@@ -143,12 +142,7 @@ impl client::Handler for Handler {
             .to_string();
         let algorithm = public_key.algorithm().to_string();
 
-        let verdict = if !self.known_hosts.exists() {
-            KeyVerdict::Unknown {
-                algorithm,
-                fingerprint,
-            }
-        } else {
+        let verdict =
             match check_known_hosts_path(&self.host, self.port, &public_key, &self.known_hosts) {
                 Ok(true) => KeyVerdict::Trusted,
                 Ok(false) => KeyVerdict::Unknown {
@@ -157,8 +151,7 @@ impl client::Handler for Handler {
                 },
                 Err(russh::keys::Error::KeyChanged { line }) => KeyVerdict::Changed { line },
                 Err(error) => KeyVerdict::Error(error.to_string()),
-            }
-        };
+            };
         let trusted = matches!(verdict, KeyVerdict::Trusted);
         debug!(
             "host key verdict for {}:{} -> {:?}",
@@ -182,7 +175,6 @@ enum ConnError {
 
 async fn connect_and_auth(
     cfg: &russh_config::Config,
-    identity_files: &[PathBuf],
     known_hosts: &Path,
 ) -> Result<Arc<Handle<Handler>>, ConnError> {
     let stream = cfg
@@ -247,45 +239,43 @@ async fn connect_and_auth(
         }
     };
 
-    authenticate(&mut handle, &cfg.user(), identity_files)
-        .await
-        .map_err(ConnError::Fatal)?;
+    let identity_files = cfg.host_config.identity_file.as_deref().unwrap_or_default();
+    if let Err(error) = authenticate(&mut handle, &cfg.user(), identity_files).await {
+        return Err(if handle.is_closed() {
+            ConnError::Transient(error.context("SSH connection closed during authentication"))
+        } else {
+            ConnError::Fatal(error)
+        });
+    }
 
     Ok(Arc::new(handle))
 }
 
-/// Try each key source in priority order: IdentityFile entries, default key
-/// paths, then ssh-agent. Public key only; password auth is not implemented.
+/// Try IdentityFile entries, then ssh-agent.
+/// Key files must be unencrypted; no password prompts.
 async fn authenticate(
     handle: &mut Handle<Handler>,
     user: &str,
     identity_files: &[PathBuf],
 ) -> Result<()> {
-    let mut candidates: Vec<PathBuf> = identity_files.to_vec();
-    let ssh_dir = home_dir()?.join(".ssh");
-    for name in ["id_ed25519", "id_rsa"] {
-        let path = ssh_dir.join(name);
-        if path.exists() && !candidates.contains(&path) {
-            candidates.push(path);
-        }
-    }
-
+    let hash = handle
+        .best_supported_rsa_hash()
+        .await
+        .context("cannot query server signature algorithms")?
+        .flatten();
     let mut tried = 0usize;
-    for path in &candidates {
-        if !path.exists() {
-            warn!("IdentityFile {} does not exist, skipping", path.display());
-            continue;
-        }
-        let Some(key) = load_key_interactive(path) else {
-            continue;
+    for path in identity_files {
+        let key = match load_secret_key(path, None) {
+            Ok(key) => key,
+            Err(error) => {
+                warn!(
+                    "cannot load unencrypted key {}: {error}; skipping",
+                    path.display()
+                );
+                continue;
+            }
         };
         tried += 1;
-        let hash = handle
-            .best_supported_rsa_hash()
-            .await
-            .ok()
-            .flatten()
-            .flatten();
         match handle
             .authenticate_publickey(user, PrivateKeyWithHashAlg::new(Arc::new(key), hash))
             .await
@@ -294,8 +284,11 @@ async fn authenticate(
                 info!("authenticated as {user} with key {}", path.display());
                 return Ok(());
             }
+            _ if handle.is_closed() => {
+                bail!("SSH connection closed while trying {}", path.display())
+            }
             Ok(_) => debug!("key {} was rejected by the server", path.display()),
-            Err(error) => debug!("auth with {} failed: {error:#}", path.display()),
+            Err(error) => return Err(error).context("public key authentication failed"),
         }
     }
 
@@ -308,12 +301,6 @@ async fn authenticate(
                         continue;
                     };
                     tried += 1;
-                    let hash = handle
-                        .best_supported_rsa_hash()
-                        .await
-                        .ok()
-                        .flatten()
-                        .flatten();
                     match handle
                         .authenticate_publickey_with(user, key.clone(), hash, &mut agent)
                         .await
@@ -321,6 +308,9 @@ async fn authenticate(
                         Ok(result) if result.success() => {
                             info!("authenticated as {user} with ssh-agent key ({comment})");
                             return Ok(());
+                        }
+                        _ if handle.is_closed() => {
+                            bail!("SSH connection closed while trying agent key {comment}")
                         }
                         Ok(_) => debug!("agent key {comment} was rejected by the server"),
                         Err(error) => debug!("agent auth with {comment} failed: {error}"),
@@ -334,38 +324,8 @@ async fn authenticate(
 
     bail!(
         "authentication failed (publickey only; password/keyboard-interactive are not supported). \
-         Tried {tried} key(s) from IdentityFile/default paths/ssh-agent."
+         Tried {tried} key(s) from IdentityFile/ssh-agent."
     )
-}
-
-/// Load a private key; if it is encrypted, ask for the passphrase on the
-/// terminal (hidden input) up to 3 times.
-fn load_key_interactive(path: &Path) -> Option<PrivateKey> {
-    match load_secret_key(path, None) {
-        Ok(key) => Some(key),
-        Err(russh::keys::Error::KeyIsEncrypted) => {
-            for _ in 0..3 {
-                let prompt = format!("Enter passphrase for {}: ", path.display());
-                let passphrase = match rpassword::prompt_password(prompt) {
-                    Ok(passphrase) => passphrase,
-                    Err(error) => {
-                        warn!("cannot read passphrase: {error}");
-                        return None;
-                    }
-                };
-                match load_secret_key(path, Some(&passphrase)) {
-                    Ok(key) => return Some(key),
-                    Err(_) => error!("incorrect passphrase for {}", path.display()),
-                }
-            }
-            warn!("giving up on encrypted key {}", path.display());
-            None
-        }
-        Err(error) => {
-            warn!("cannot load key {}: {error}", path.display());
-            None
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -376,8 +336,7 @@ struct SessionParams {
     port_lo: u16,
     port_hi: u16,
     exclude: BTreeSet<u16>,
-    interval: f64,
-    on_conflict: OnConflict,
+    skip: bool,
 }
 
 /// Runs until the connection breaks; always returns Err (transient).
@@ -391,51 +350,28 @@ async fn poll_loop(session: Arc<Handle<Handler>>, params: &SessionParams) -> Res
         .await
         .context("cannot start remote probe")?;
 
-    let mut adaptive = Adaptive::new(params.interval);
     let mut buffer = Vec::new();
-    let mut forwards = ForwardManager::new();
+    let mut forwards = ForwardManager::default();
 
-    channel
-        .data_bytes(format!("{:.2}\n", adaptive.current()))
-        .await
-        .context("cannot trigger remote probe")?;
+    let result = loop {
+        let frame = match read_frame(&mut channel, &mut buffer, Duration::from_secs(30)).await {
+            Ok(frame) => frame,
+            Err(error) => break Err(error),
+        };
 
-    let result = async {
-        loop {
-            let timeout = Duration::from_secs_f64(adaptive.current() * 3.0 + 60.0);
-            let frame = read_frame(&mut channel, &mut buffer, timeout).await?;
-
-            let changed = match parse_frame(&frame) {
-                Ok(ports) => {
-                    let target: BTreeSet<u16> = ports
-                        .into_iter()
-                        .filter(|port| {
-                            *port >= params.port_lo
-                                && *port <= params.port_hi
-                                && !params.exclude.contains(port)
-                        })
-                        .collect();
-                    debug!("remote listening ports (filtered): {target:?}");
-                    forwards
-                        .reconcile(&session, target, params.on_conflict)
-                        .await
-                }
-                Err(error) => {
-                    warn!("cannot parse probe frame, skipping round: {error:#}");
-                    false
-                }
-            };
-
-            let next = adaptive.next(changed);
-            channel
-                .data_bytes(format!("{next:.2}\n"))
-                .await
-                .context("cannot reach remote probe")?;
+        match parse_frame(&frame) {
+            Ok(mut ports) => {
+                ports.retain(|port| {
+                    *port >= params.port_lo
+                        && *port <= params.port_hi
+                        && !params.exclude.contains(port)
+                });
+                debug!("remote listening ports (filtered): {ports:?}");
+                forwards.reconcile(&session, ports, params.skip).await;
+            }
+            Err(error) => warn!("cannot parse probe frame, skipping round: {error:#}"),
         }
-        #[allow(unreachable_code)]
-        Ok::<(), anyhow::Error>(())
-    }
-    .await;
+    };
 
     forwards.stop_all().await;
     result
@@ -446,28 +382,35 @@ async fn poll_loop(session: Arc<Handle<Handler>>, params: &SessionParams) -> Res
 // ---------------------------------------------------------------------------
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> std::process::ExitCode {
+    match run().await {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            error!("{error:#}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+async fn run() -> Result<()> {
     let cli = Cli::parse();
     tracing_subscriber::fmt()
-        .with_max_level(if cli.verbose {
+        .with_max_level(if cli.debug {
             tracing::Level::DEBUG
         } else {
             tracing::Level::INFO
         })
         .with_target(false)
         .without_time()
+        .with_writer(std::io::stderr)
         .init();
 
-    ensure_host_alias(&cli.host)?;
-    let config = russh_config::parse_home(&cli.host).context("failed to parse ~/.ssh/config")?;
+    let config = load_config(&cli.host)?;
 
     if config.host_config.proxy_jump.is_some() {
-        error!(
-            "host '{}' uses ProxyJump, which is not supported yet by this tool.",
-            cli.host
-        );
         bail!(
-            "ProxyJump is not supported yet; please remove it from ~/.ssh/config or connect directly."
+            "host '{}' uses ProxyJump, which is not supported yet; please remove it from ~/.ssh/config or connect directly.",
+            cli.host
         );
     }
     if let Some(command) = &config.host_config.proxy_command {
@@ -480,14 +423,12 @@ async fn main() -> Result<()> {
         .user_known_hosts_file
         .clone()
         .unwrap_or_else(|| home.join(".ssh").join("known_hosts"));
-    let identity_files = config.host_config.identity_file.clone().unwrap_or_default();
 
     let params = SessionParams {
         port_lo: cli.port_range.0,
         port_hi: cli.port_range.1,
         exclude: cli.exclude.iter().copied().collect(),
-        interval: cli.interval,
-        on_conflict: cli.on_conflict,
+        skip: cli.skip,
     };
 
     info!(
@@ -505,7 +446,7 @@ async fn main() -> Result<()> {
 
     let mut backoff = 1.0;
     loop {
-        match connect_and_auth(&config, &identity_files, &known_hosts).await {
+        match connect_and_auth(&config, &known_hosts).await {
             Ok(session) => {
                 info!("connected; (re)building forwards from remote state");
                 backoff = 1.0;
@@ -515,10 +456,7 @@ async fn main() -> Result<()> {
                 }
                 info!("all forwards torn down");
             }
-            Err(ConnError::Fatal(error)) => {
-                error!("{error:#}");
-                return Err(error);
-            }
+            Err(ConnError::Fatal(error)) => return Err(error),
             Err(ConnError::Transient(error)) => {
                 warn!("connect failed: {error:#}");
             }
