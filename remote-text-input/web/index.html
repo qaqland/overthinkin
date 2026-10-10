@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>远程输入</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+    body { max-width: 640px; margin: 0 auto; padding: 24px 16px; }
+    h1 { font-size: 1.5rem; }
+    textarea { box-sizing: border-box; width: 100%; min-height: 220px; margin: 12px 0; padding: 12px; font: inherit; font-size: 18px; border: 1px solid #888; border-radius: 8px; resize: vertical; }
+    button { min-height: 48px; padding: 10px 24px; font: inherit; border: 0; border-radius: 8px; background: #1769d2; color: white; cursor: pointer; }
+    button:disabled { background: #777; opacity: .5; cursor: not-allowed; }
+    .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    #error { color: #d34c38; min-height: 1.5em; }
+    .hint { opacity: .75; font-size: .9rem; }
+  </style>
+</head>
+<body>
+  <h1>远程输入</h1>
+  <p id="status" role="status">正在连接…</p>
+  <label for="draft">输入内容</label>
+  <textarea id="draft" placeholder="在这里打字，电脑上显示预编辑文字。" spellcheck="false"></textarea>
+  <div class="row">
+    <span id="count" class="hint">0 / 3900 字节</span>
+    <button id="send" type="button" disabled>发送</button>
+  </div>
+  <p id="error" role="alert"></p>
+  <button id="reconnect" type="button" hidden>重新连接</button>
+  <p class="hint">发送只提交文字，不模拟回车。关闭页面后下一会话自动接管。排队或没有输入焦点时仍可写草稿。</p>
+  <script>
+    const draft = document.querySelector('#draft');
+    const sendButton = document.querySelector('#send');
+    const status = document.querySelector('#status');
+    const count = document.querySelector('#count');
+    const error = document.querySelector('#error');
+    const reconnect = document.querySelector('#reconnect');
+    const encoder = new TextEncoder();
+    let socket;
+    let target = { active: false, epoch: 0 };
+    let composing = false;
+    let pendingId = null;
+    let nextId = 0;
+    let timer;
+
+    function connected() {
+      return socket?.readyState === WebSocket.OPEN;
+    }
+
+    function valid() {
+      return encoder.encode(draft.value).length <= 3900 && !draft.value.includes('\0');
+    }
+
+    function refresh() {
+      count.textContent = `${encoder.encode(draft.value).length} / 3900 字节`;
+      sendButton.disabled = !connected() || !target.active || composing || pendingId !== null || !draft.value || !valid();
+      draft.disabled = pendingId !== null;
+    }
+
+    function syncDraft() {
+      if (connected() && target.active && pendingId === null && valid()) {
+        socket.send(JSON.stringify({ type: 'draft', epoch: target.epoch, text: draft.value }));
+      }
+    }
+
+    function connect() {
+      target.active = false;
+      refresh();
+      reconnect.hidden = true;
+      status.textContent = '正在连接…';
+      socket = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`);
+      socket.onmessage = event => {
+        const message = JSON.parse(event.data);
+        if (message.type === 'waiting') {
+          clearTimeout(timer);
+          target.active = false;
+          status.textContent = '排队等待：前面的会话关闭后自动接管';
+        } else if (message.type === 'state') {
+          if (target.epoch !== message.state.epoch) clearTimeout(timer);
+          target = message.state;
+          status.textContent = target.active ? '已接管，可以输入' : '已接管，请在电脑上选择输入位置';
+        } else if (message.type === 'ack' && message.id !== null && message.id === pendingId) {
+          pendingId = null;
+          draft.value = '';
+          error.textContent = '';
+        } else if (message.type === 'error') {
+          error.textContent = message.message;
+          if (message.id === pendingId) pendingId = null;
+        }
+        refresh();
+      };
+      socket.onerror = () => {
+        error.textContent = '连接失败：请检查网址和网络。';
+      };
+      socket.onclose = () => {
+        clearTimeout(timer);
+        target.active = false;
+        if (pendingId !== null) error.textContent = '发送结果未知，请先检查电脑上的内容再重试。';
+        pendingId = null;
+        status.textContent = '连接已断开，草稿已保留';
+        reconnect.hidden = false;
+        refresh();
+      };
+    }
+
+    draft.addEventListener('input', () => {
+      error.textContent = valid() ? '' : '文本超过 3900 UTF-8 字节或包含 NUL，未同步';
+      refresh();
+      clearTimeout(timer);
+      timer = setTimeout(syncDraft, 40);
+    });
+    draft.addEventListener('compositionstart', () => { composing = true; refresh(); });
+    draft.addEventListener('compositionend', () => { composing = false; refresh(); syncDraft(); });
+    sendButton.addEventListener('click', () => {
+      if (sendButton.disabled) return;
+      clearTimeout(timer);
+      pendingId = ++nextId;
+      socket.send(JSON.stringify({ type: 'send', epoch: target.epoch, id: pendingId, text: draft.value }));
+      refresh();
+    });
+    reconnect.addEventListener('click', connect);
+    connect();
+  </script>
+</body>
+</html>

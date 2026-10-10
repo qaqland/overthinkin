@@ -1,0 +1,14 @@
+[package]
+name = "remote-text-input"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+axum = { version = "0.8", features = ["ws"] }
+calloop = "0.14"
+calloop-wayland-source = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "signal"] }
+wayland-client = "0.31"
+wayland-protocols-misc = { version = "0.3", features = ["client"] }
