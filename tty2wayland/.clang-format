@@ -1,0 +1,22 @@
+# https://clang.llvm.org/docs/ClangFormatStyleOptions.html#examples
+# A style similar to the Linux Kernel style:
+
+BasedOnStyle: LLVM
+IndentWidth: 8
+ColumnLimit: 100
+UseTab: Always
+BreakBeforeBraces: Linux
+AllowShortIfStatementsOnASingleLine: false
+IndentCaseLabels: false
+BreakAfterReturnType: All
+
+ContinuationIndentWidth: 8
+ReflowComments: true
+SortIncludes: true
+SpaceAfterCStyleCast: true
+TabWidth: 8
+ForEachMacros:
+  - wl_list_for_each
+  - wl_list_for_each_safe
+  - wl_list_for_each_reverse
+
