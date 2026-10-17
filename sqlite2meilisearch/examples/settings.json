@@ -1,0 +1,5 @@
+{
+  "searchableAttributes": ["title", "brand.name", "tags"],
+  "filterableAttributes": ["brand.name", "tags", "price_cents"],
+  "sortableAttributes": ["price_cents"]
+}
