@@ -17,6 +17,7 @@ usage: check-my-alsa <applet> [args...]
 
 applets:
   caps     probe card hardware capabilities
+  hdmi     inspect HDMI/DP availability and ELD capabilities
   jack     monitor jack plug/unplug events
   latency  measure playback clock drift and reported delay
   play     playback smoke test (PipeWire path)

@@ -14,6 +14,7 @@ sources = files(
     'main.c',
     'app-common.c',
     'app-caps.c',
+    'app-hdmi.c',
     'app-jack.c',
     'app-xrun.c',
     'app-latency.c',

@@ -37,6 +37,7 @@ Layout mirrors PipeWire's `spa/plugins/alsa`:
 | `alsa-pcm-sink.c`     | `spa/plugins/alsa/alsa-pcm-sink.c`         |
 | `app-common.c`/`.h`   | applet registry + CLI/report helpers       |
 | `app-caps.c`          | `alsa-pcm-device.c` + `test-hw-params.c`   |
+| `app-hdmi.c`          | `acp.c` + `alsa-util.c`                    |
 | `app-jack.c`          | `bind_ctl` machinery in `alsa-pcm.c`       |
 | `app-play`/`app-xrun`/`app-latency`/`app-recover` | `alsa-pcm-sink.c` node process side |
 
